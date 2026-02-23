@@ -1,0 +1,14 @@
+{
+  "name": "@fun-euchre/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm run build && node dist/index.js",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "echo \"TODO: add tests for @fun-euchre/server\""
+  }
+}

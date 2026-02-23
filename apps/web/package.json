@@ -1,0 +1,14 @@
+{
+  "name": "@fun-euchre/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm run build && node dev-server.mjs",
+    "start": "node dev-server.mjs",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit && eslint --max-warnings=0 dev-server.mjs",
+    "test": "echo \"TODO: add tests for @fun-euchre/web\""
+  }
+}
