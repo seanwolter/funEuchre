@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "\"$npm_execpath\" -r --parallel --if-present dev",
     "build": "\"$npm_execpath\" -r --if-present build",
-    "test": "\"$npm_execpath\" -r --if-present test",
+    "test": "\"$npm_execpath\" --filter @fun-euchre/protocol build && \"$npm_execpath\" -r --if-present test",
     "lint": "\"$npm_execpath\" --filter @fun-euchre/protocol build && \"$npm_execpath\" -r --if-present lint",
     "typecheck": "\"$npm_execpath\" --filter @fun-euchre/protocol build && \"$npm_execpath\" -r --if-present typecheck"
   },
