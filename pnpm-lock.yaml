@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      corepack:
-        specifier: ^0.34.6
-        version: 0.34.6
     devDependencies:
       '@types/node':
         specifier: ^22.13.4
@@ -108,11 +104,6 @@ packages:
   brace-expansion@5.0.3:
     resolution: {integrity: sha512-fy6KJm2RawA5RcHkLa1z/ScpBeA762UF9KmZQxwIbDtRJrgLzM10depAiEQ+CXYcoiqW1/m96OAAoke2nE9EeA==}
     engines: {node: 18 || 20 || >=22}
-
-  corepack@0.34.6:
-    resolution: {integrity: sha512-gvylq9kzJB09mSsiOnKOnhg0YdCWNy2aGaeGbYF4HlyGd/v4moxEonQjJPYI45/K4zP7q1hW9qCVvaYYKK5nkA==}
-    engines: {node: ^20.10.0 || ^22.11.0 || >=24.0.0}
-    hasBin: true
 
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
@@ -388,8 +379,6 @@ snapshots:
   brace-expansion@5.0.3:
     dependencies:
       balanced-match: 4.0.4
-
-  corepack@0.34.6: {}
 
   cross-spawn@7.0.6:
     dependencies:

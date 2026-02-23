@@ -24,6 +24,7 @@ Source: `thoughts/shared/plans/001_multiplayer_web_euchre_mvp.md` (Phase 1: Foun
 - [x] Task 7 verification passed (`pnpm lint` exits successfully with zero errors).
 - [x] Task 8 implementation completed with CI workflow at `.github/workflows/ci.yml` (install, lint, typecheck, and unit-test jobs in fail-fast sequence).
 - [x] Task 8 local gate verification passed (`pnpm lint`, `pnpm typecheck`, `pnpm test`).
+- [x] Task 8 follow-up fix applied: root `lint`/`typecheck` now build `@fun-euchre/protocol` declarations first to avoid CI module-resolution failures on clean runners.
 - [ ] Task 8 final validation is pending a real GitHub test PR run.
 
 ## Priority Legend
