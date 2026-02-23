@@ -25,7 +25,10 @@ Source: `thoughts/shared/plans/001_multiplayer_web_euchre_mvp.md` (Phase 1: Foun
 - [x] Task 8 implementation completed with CI workflow at `.github/workflows/ci.yml` (install, lint, typecheck, and unit-test jobs in fail-fast sequence).
 - [x] Task 8 local gate verification passed (`pnpm lint`, `pnpm typecheck`, `pnpm test`).
 - [x] Task 8 follow-up fix applied: root `lint`/`typecheck` now build `@fun-euchre/protocol` declarations first to avoid CI module-resolution failures on clean runners.
-- [ ] Task 8 final validation is pending a real GitHub test PR run.
+- [x] Task 8 final validation completed via successful GitHub PR checks.
+- [x] Task 9 implementation completed with smoke tests in `apps/server/test/health.test.ts`, `apps/web/test/smoke.test.tsx`, and `packages/protocol/test/smoke.test.ts`.
+- [x] Task 9 verification passed (`pnpm test` executes tests across all workspaces and passes).
+- [x] Task 10 implementation completed with contributor onboarding documentation in `README.md`.
 
 ## Priority Legend
 - `P0` = Blocker for all downstream phases
@@ -134,10 +137,10 @@ Source: `thoughts/shared/plans/001_multiplayer_web_euchre_mvp.md` (Phase 1: Foun
 6. Task 10 can run in parallel once Tasks 1-5 are stable
 
 ## Phase 1 Exit Checklist
-- [ ] `pnpm install` succeeds from a clean clone
-- [ ] `pnpm lint` passes
-- [ ] `pnpm typecheck` passes
-- [ ] `pnpm test` passes
-- [ ] `pnpm dev` starts both server and web
-- [ ] Server `/health` endpoint is reachable
-- [ ] Web shell is usable on desktop and mobile viewport sizes
+- [x] `pnpm install` succeeds from a clean clone
+- [x] `pnpm lint` passes
+- [x] `pnpm typecheck` passes
+- [x] `pnpm test` passes
+- [x] `pnpm dev` starts both server and web
+- [x] Server `/health` endpoint is reachable
+- [x] Web shell is usable on desktop and mobile viewport sizes

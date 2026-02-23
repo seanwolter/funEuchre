@@ -6,7 +6,7 @@ import {
   parseServerToClientEvent,
   validateClientToServerEvent,
   validateServerToClientEvent
-} from "./index.js";
+} from "../src/index.js";
 
 test("validateClientToServerEvent accepts lobby.create payload", () => {
   const result = validateClientToServerEvent({
