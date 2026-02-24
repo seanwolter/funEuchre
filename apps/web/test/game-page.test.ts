@@ -143,3 +143,16 @@ test("deriveActionStatusText surfaces rejected action feedback inline", () => {
 
   assert.match(status, /Rejected:/);
 });
+
+test("deriveActionStatusText indicates waiting seat when it is not actor turn", () => {
+  const status = deriveActionStatusText({
+    pendingLabel: null,
+    latestRejectionMessage: null,
+    latestNoticeMessage: null,
+    actorSeat: "west",
+    phase: "round1_bidding",
+    currentTurnSeat: "east"
+  });
+
+  assert.equal(status, "Waiting for east to act. You are west.");
+});

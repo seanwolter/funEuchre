@@ -6,6 +6,7 @@
   "packageManager": "pnpm@10.0.0",
   "scripts": {
     "dev": "\"$npm_execpath\" -r --parallel --if-present dev",
+    "start": "node apps/server/dist/index.js",
     "build": "\"$npm_execpath\" -r --if-present build",
     "test": "\"$npm_execpath\" --filter @fun-euchre/protocol build && \"$npm_execpath\" -r --if-present test",
     "lint": "\"$npm_execpath\" --filter @fun-euchre/protocol build && \"$npm_execpath\" -r --if-present lint",

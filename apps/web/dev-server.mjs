@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize } from "node:path";
 import { createConnection } from "node:net";
+import { connect as createTlsConnection } from "node:tls";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_PORT = 5173;
@@ -36,6 +37,7 @@ const apiPort =
       ? 443
       : 80;
 const apiHost = apiOrigin.hostname;
+const apiHostHeader = apiOrigin.host;
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -198,6 +200,31 @@ function normalizeRequestPath(urlValue, hostHeader) {
   return parsed.pathname;
 }
 
+function connectUpgradeUpstream(onConnected) {
+  if (apiOrigin.protocol === "http:") {
+    return createConnection(
+      {
+        host: apiHost,
+        port: apiPort
+      },
+      onConnected
+    );
+  }
+
+  if (apiOrigin.protocol === "https:") {
+    return createTlsConnection(
+      {
+        host: apiHost,
+        port: apiPort,
+        servername: apiHost
+      },
+      onConnected
+    );
+  }
+
+  throw new Error(`Unsupported API_ORIGIN protocol "${apiOrigin.protocol}" for websocket proxy.`);
+}
+
 const port = resolvePort(process.env.PORT);
 const host = process.env.HOST ?? DEFAULT_HOST;
 
@@ -263,20 +290,26 @@ server.on("upgrade", (req, socket, head) => {
     return;
   }
 
-  const upstream = createConnection(
-    {
-      host: apiHost,
-      port: apiPort
-    },
-    () => {
+  let upstream;
+  try {
+    upstream = connectUpgradeUpstream(() => {
       let requestHead = `${req.method ?? "GET"} ${req.url ?? "/"} HTTP/${req.httpVersion}\r\n`;
+      let wroteHostHeader = false;
       for (let index = 0; index < req.rawHeaders.length; index += 2) {
         const headerName = req.rawHeaders[index];
         const headerValue = req.rawHeaders[index + 1];
         if (headerName === undefined || headerValue === undefined) {
           continue;
         }
+        if (headerName.toLowerCase() === "host") {
+          requestHead += `Host: ${apiHostHeader}\r\n`;
+          wroteHostHeader = true;
+          continue;
+        }
         requestHead += `${headerName}: ${headerValue}\r\n`;
+      }
+      if (!wroteHostHeader) {
+        requestHead += `Host: ${apiHostHeader}\r\n`;
       }
       requestHead += "\r\n";
 
@@ -286,8 +319,11 @@ server.on("upgrade", (req, socket, head) => {
       }
       socket.pipe(upstream);
       upstream.pipe(socket);
-    }
-  );
+    });
+  } catch {
+    socket.destroy();
+    return;
+  }
 
   upstream.on("error", () => {
     socket.destroy();

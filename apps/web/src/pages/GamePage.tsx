@@ -1,4 +1,10 @@
-import type { Seat, ServerToClientEvent, Suit } from "@fun-euchre/protocol";
+import type {
+  GamePhase,
+  GamePrivateStatePayload,
+  Seat,
+  ServerToClientEvent,
+  Suit
+} from "@fun-euchre/protocol";
 import { renderBiddingPanel } from "../components/BiddingPanel.js";
 import { renderCardHand } from "../components/CardHand.js";
 import { renderScoreboard } from "../components/Scoreboard.js";
@@ -64,7 +70,7 @@ type ElementConstructor<TElement extends HTMLElement> = new (
 type ActionContext = {
   gameId: string;
   actorSeat: Seat;
-  phase: string | null;
+  phase: GamePhase | null;
   playableCardIds: Set<string>;
   canPass: boolean;
   canOrderUp: boolean;
@@ -244,24 +250,57 @@ export function mountGamePage(options: GamePageMountOptions): () => void {
 
     const snapshot = options.store.getState();
     const game = snapshot.game;
-    const privateState = snapshot.privateGame;
     const actorSeat = resolveActorSeat(snapshot.lobby, currentSession.identity.playerId);
-    if (!game || !privateState || !actorSeat) {
+    if (!game || !actorSeat) {
       return null;
     }
-    if (privateState.gameId !== game.gameId) {
-      return null;
-    }
+
+    const privateState =
+      snapshot.privateGame &&
+      snapshot.privateGame.gameId === game.gameId &&
+      snapshot.privateGame.seat === actorSeat
+        ? snapshot.privateGame
+        : null;
+    const isBiddingTurn =
+      (game.phase === "round1_bidding" || game.phase === "round2_bidding") &&
+      game.turn === actorSeat;
+    const callableTrumpSuits =
+      privateState?.legalActions.callableTrumpSuits ??
+      (game.phase === "round2_bidding" && isBiddingTurn
+        ? game.bidding?.availableTrumpSuits ?? []
+        : []);
 
     return {
       gameId: game.gameId,
       actorSeat,
-      phase: privateState.phase,
-      playableCardIds: new Set(privateState.legalActions.playableCardIds),
-      canPass: privateState.legalActions.canPass,
-      canOrderUp: privateState.legalActions.canOrderUp,
-      callableTrumpSuits: privateState.legalActions.callableTrumpSuits
+      phase: privateState?.phase ?? game.phase ?? null,
+      playableCardIds: new Set(privateState?.legalActions.playableCardIds ?? []),
+      canPass: privateState?.legalActions.canPass ?? isBiddingTurn,
+      canOrderUp:
+        privateState?.legalActions.canOrderUp ??
+        (game.phase === "round1_bidding" && isBiddingTurn),
+      callableTrumpSuits
     };
+  };
+
+  const privateStateForActor = (
+    actorSeat: Seat | null
+  ): GamePrivateStatePayload | null => {
+    if (!actorSeat) {
+      return null;
+    }
+
+    const snapshot = options.store.getState();
+    const gameId = snapshot.game?.gameId;
+    const privateState = snapshot.privateGame;
+    if (!gameId || !privateState) {
+      return null;
+    }
+    if (privateState.gameId !== gameId || privateState.seat !== actorSeat) {
+      return null;
+    }
+
+    return privateState;
   };
 
   const renderPanels = (): void => {
@@ -270,8 +309,19 @@ export function mountGamePage(options: GamePageMountOptions): () => void {
       snapshot.lobby,
       currentSession?.identity.playerId ?? null
     );
-    const phase = snapshot.privateGame?.phase ?? snapshot.game?.phase ?? null;
-    const canSubmit = Boolean(currentActionContext());
+    const actionContext = currentActionContext();
+    const actorPrivateState = privateStateForActor(actorSeat);
+    const phase = actionContext?.phase ?? snapshot.game?.phase ?? null;
+    const currentTurnSeat = snapshot.game?.turn ?? null;
+    const legalActions = actionContext
+      ? {
+          playableCardIds: [...actionContext.playableCardIds],
+          canPass: actionContext.canPass,
+          canOrderUp: actionContext.canOrderUp,
+          callableTrumpSuits: [...actionContext.callableTrumpSuits]
+        }
+      : null;
+    const canSubmit = Boolean(actionContext);
 
     elements.phaseText.textContent = `Phase: ${describeGamePhase(phase)}`;
     elements.seatText.textContent = actorSeat
@@ -286,12 +336,12 @@ export function mountGamePage(options: GamePageMountOptions): () => void {
     });
     elements.bidding.innerHTML = renderBiddingPanel({
       phase,
-      legalActions: snapshot.privateGame?.legalActions ?? null,
+      legalActions,
       canSubmit,
       pending: pendingLabel !== null
     });
     elements.hand.innerHTML = renderCardHand({
-      privateState: snapshot.privateGame,
+      privateState: actorPrivateState,
       phase,
       canSubmit,
       pending: pendingLabel !== null
@@ -307,7 +357,8 @@ export function mountGamePage(options: GamePageMountOptions): () => void {
           latestRejectionMessage: null,
           latestNoticeMessage: null,
           actorSeat,
-          phase
+          phase,
+          currentTurnSeat
         })
       );
       return;
@@ -320,7 +371,8 @@ export function mountGamePage(options: GamePageMountOptions): () => void {
           latestRejectionMessage: rejectionMessage,
           latestNoticeMessage: noticeMessage,
           actorSeat,
-          phase
+          phase,
+          currentTurnSeat
         })
       );
       return;
@@ -337,7 +389,8 @@ export function mountGamePage(options: GamePageMountOptions): () => void {
         latestRejectionMessage: null,
         latestNoticeMessage: noticeMessage,
         actorSeat,
-        phase
+        phase,
+        currentTurnSeat
       })
     );
   };

@@ -6,6 +6,7 @@ export type ActionStatusInput = {
   latestNoticeMessage: string | null;
   actorSeat: Seat | null;
   phase: GamePhase | null;
+  currentTurnSeat?: Seat | null;
 };
 
 export function resolveActorSeat(
@@ -59,6 +60,9 @@ export function deriveActionStatusText(input: ActionStatusInput): string {
   }
   if (input.latestNoticeMessage) {
     return input.latestNoticeMessage;
+  }
+  if (input.currentTurnSeat && input.currentTurnSeat !== input.actorSeat) {
+    return `Waiting for ${input.currentTurnSeat} to act. You are ${input.actorSeat}.`;
   }
 
   return `Ready for ${describeGamePhase(input.phase)} actions as ${input.actorSeat}.`;
