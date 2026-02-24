@@ -70,6 +70,10 @@ const goldenServerSequence: unknown[] = [
   {
     version: PROTOCOL_VERSION,
     type: "lobby.state",
+    ordering: {
+      sequence: 1,
+      emittedAtMs: 1_700_000_000_001
+    },
     payload: {
       lobbyId: "contract-lobby-1",
       hostPlayerId: "player-host",
@@ -109,6 +113,10 @@ const goldenServerSequence: unknown[] = [
   {
     version: PROTOCOL_VERSION,
     type: "game.state",
+    ordering: {
+      sequence: 1,
+      emittedAtMs: 1_700_000_000_002
+    },
     payload: {
       gameId: "contract-game-1",
       handNumber: 1,
@@ -147,6 +155,10 @@ const goldenServerSequence: unknown[] = [
   {
     version: PROTOCOL_VERSION,
     type: "game.state",
+    ordering: {
+      sequence: 2,
+      emittedAtMs: 1_700_000_000_003
+    },
     payload: {
       gameId: "contract-game-1",
       handNumber: 1,
@@ -185,6 +197,10 @@ const goldenServerSequence: unknown[] = [
   {
     version: PROTOCOL_VERSION,
     type: "action.rejected",
+    ordering: {
+      sequence: 3,
+      emittedAtMs: 1_700_000_000_004
+    },
     payload: {
       requestId: "contract-play-illegal",
       code: "INVALID_STATE",
@@ -194,6 +210,10 @@ const goldenServerSequence: unknown[] = [
   {
     version: PROTOCOL_VERSION,
     type: "lobby.state",
+    ordering: {
+      sequence: 2,
+      emittedAtMs: 1_700_000_000_005
+    },
     payload: {
       lobbyId: "contract-lobby-1",
       hostPlayerId: "player-host",
@@ -281,6 +301,10 @@ test("contract drift is rejected when critical fields violate schema", () => {
   const invalidGameState = {
     version: PROTOCOL_VERSION,
     type: "game.state",
+    ordering: {
+      sequence: 4,
+      emittedAtMs: 1_700_000_000_006
+    },
     payload: {
       gameId: "contract-game-1",
       handNumber: 1,

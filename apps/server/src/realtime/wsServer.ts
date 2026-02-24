@@ -3,22 +3,28 @@ import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { parseGameId, parseReconnectToken, parseSessionId } from "../domain/ids.js";
 import { setLobbyPlayerConnection } from "../domain/lobby.js";
-import type { InMemoryLobbyStore } from "../domain/lobbyStore.js";
 import { toLobbyStateEvent } from "../domain/protocolAdapter.js";
 import type { ReconnectPolicy } from "../domain/reconnectPolicy.js";
-import type { InMemorySessionStore } from "../domain/sessionStore.js";
+import type {
+  RuntimeLobbyStorePort,
+  RuntimeRealtimeFanoutPort,
+  RuntimeSessionStorePort
+} from "../domain/runtimePorts.js";
 import type { SessionId } from "../domain/types.js";
 import { createNoopLogger, type StructuredLogger } from "../observability/logger.js";
-import type { InMemorySocketServer } from "./socketServer.js";
+import type { OperationalMetrics } from "../observability/metrics.js";
+import type { ReconnectTokenManager } from "../security/reconnectToken.js";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const DEFAULT_WS_PATH = "/realtime/ws";
 
 type WsRuntimeDependencies = {
-  lobbyStore: InMemoryLobbyStore;
-  sessionStore: InMemorySessionStore;
+  lobbyStore: RuntimeLobbyStorePort;
+  sessionStore: RuntimeSessionStorePort;
   reconnectPolicy: ReconnectPolicy;
-  socketServer: InMemorySocketServer;
+  reconnectTokenManager: ReconnectTokenManager;
+  socketServer: RuntimeRealtimeFanoutPort;
+  requestCheckpoint?: () => void;
   now?: () => number;
 };
 
@@ -27,6 +33,7 @@ export type WsServerOptions = {
   runtime: WsRuntimeDependencies;
   path?: string;
   logger?: StructuredLogger;
+  metrics?: OperationalMetrics;
 };
 
 export type WsServerHandle = {
@@ -239,6 +246,7 @@ async function applySessionConnectionState(
   }
 
   dependencies.lobbyStore.upsert({ state: updatedLobby.state });
+  dependencies.requestCheckpoint?.();
   await dependencies.socketServer.broadcastLobbyEvents(session.lobbyId, [
     toLobbyStateEvent(updatedLobby.state)
   ]);
@@ -247,8 +255,18 @@ async function applySessionConnectionState(
 export function createWsServer(options: WsServerOptions): WsServerHandle {
   const path = options.path ?? DEFAULT_WS_PATH;
   const logger = options.logger ?? createNoopLogger();
+  const metrics = options.metrics;
   const now = options.runtime.now ?? (() => Date.now());
   const socketsBySessionId = new Map<SessionId, Duplex>();
+  const syncActiveSessionCount = (): void => {
+    metrics?.setActiveSessionCount(socketsBySessionId.size);
+  };
+  const recordReconnectFailure = (reason: string): void => {
+    metrics?.recordReconnectFailure({
+      transport: "websocket",
+      reason
+    });
+  };
 
   const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
     if (!isWebSocketUpgrade(request)) {
@@ -260,8 +278,13 @@ export function createWsServer(options: WsServerOptions): WsServerHandle {
       return;
     }
 
+    metrics?.recordReconnectAttempt({
+      transport: "websocket"
+    });
+
     const requestUrl = getRequestUrl(request);
     if (!requestUrl) {
+      recordReconnectFailure("INVALID_REQUEST_URL");
       writeHttpUpgradeError(socket, 400, "Bad Request");
       return;
     }
@@ -271,22 +294,43 @@ export function createWsServer(options: WsServerOptions): WsServerHandle {
       requestUrl.searchParams.get("reconnectToken")
     );
     if (!sessionId || !reconnectToken) {
+      recordReconnectFailure("INVALID_QUERY");
+      writeHttpUpgradeError(socket, 401, "Unauthorized");
+      return;
+    }
+
+    const tokenVerification = options.runtime.reconnectTokenManager.verify(reconnectToken, {
+      expectedSessionId: sessionId
+    });
+    if (!tokenVerification.ok) {
+      recordReconnectFailure("UNAUTHORIZED");
       writeHttpUpgradeError(socket, 401, "Unauthorized");
       return;
     }
 
     const session = options.runtime.sessionStore.getBySessionId(sessionId);
     if (!session || session.reconnectToken !== reconnectToken) {
+      recordReconnectFailure("UNAUTHORIZED");
+      writeHttpUpgradeError(socket, 401, "Unauthorized");
+      return;
+    }
+    if (
+      session.lobbyId !== tokenVerification.claims.lobbyId ||
+      session.playerId !== tokenVerification.claims.playerId
+    ) {
+      recordReconnectFailure("UNAUTHORIZED");
       writeHttpUpgradeError(socket, 401, "Unauthorized");
       return;
     }
     if (options.runtime.reconnectPolicy.shouldForfeit(session, now())) {
+      recordReconnectFailure("FORBIDDEN");
       writeHttpUpgradeError(socket, 403, "Forbidden");
       return;
     }
 
     const key = request.headers["sec-websocket-key"];
     if (typeof key !== "string" || key.length === 0) {
+      recordReconnectFailure("INVALID_HANDSHAKE");
       writeHttpUpgradeError(socket, 400, "Bad Request");
       return;
     }
@@ -296,6 +340,7 @@ export function createWsServer(options: WsServerOptions): WsServerHandle {
       sendClose(existingSocket, 1012, "Replaced by newer websocket session.");
       existingSocket.destroy();
       socketsBySessionId.delete(sessionId);
+      syncActiveSessionCount();
     }
 
     const accept = websocketAcceptValue(key);
@@ -310,6 +355,10 @@ export function createWsServer(options: WsServerOptions): WsServerHandle {
       socket.setNoDelay(true);
     }
     socketsBySessionId.set(sessionId, socket);
+    syncActiveSessionCount();
+    metrics?.recordReconnectSuccess({
+      transport: "websocket"
+    });
 
     options.runtime.socketServer.connectSession({
       sessionId,
@@ -335,6 +384,7 @@ export function createWsServer(options: WsServerOptions): WsServerHandle {
       disconnected = true;
       if (socketsBySessionId.get(sessionId) === socket) {
         socketsBySessionId.delete(sessionId);
+        syncActiveSessionCount();
       }
       options.runtime.socketServer.disconnectSession(sessionId);
       void applySessionConnectionState(options.runtime, sessionId, false, logger);
@@ -516,6 +566,7 @@ export function createWsServer(options: WsServerOptions): WsServerHandle {
         socket.destroy();
       }
       socketsBySessionId.clear();
+      syncActiveSessionCount();
     }
   };
 }

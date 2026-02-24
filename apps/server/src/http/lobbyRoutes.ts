@@ -19,6 +19,7 @@ import {
   writeJsonError,
   writeJsonResponse
 } from "./json.js";
+import type { OperationalMetrics } from "../observability/metrics.js";
 
 type LobbyCommandKind =
   | "lobby.create"
@@ -59,6 +60,7 @@ export type LobbyCommandDispatcher = (
 export type LobbyRoutesOptions = {
   dispatchCommand?: LobbyCommandDispatcher;
   logger?: StructuredLogger;
+  metrics?: OperationalMetrics;
 };
 
 const DEFAULT_LOBBY_DISPATCHER: LobbyCommandDispatcher = () => ({
@@ -103,16 +105,63 @@ function correlationFromLobbyCommand(
   }
 }
 
+function elapsedSince(startedAtMs: number): number {
+  return Math.max(0, Date.now() - startedAtMs);
+}
+
 async function handleLobbyRoute(
   routeType: LobbyCommandKind,
   dispatchCommand: LobbyCommandDispatcher,
   logger: StructuredLogger,
+  metrics: OperationalMetrics | undefined,
   request: IncomingMessage,
   response: ServerResponse,
   payloadFactory: (body: Record<string, unknown>) => Record<string, unknown>
 ): Promise<void> {
+  const startedAtMs = Date.now();
+  let reconnectAttempted = false;
+  const recordCommand = (
+    outcome: "accepted" | "rejected",
+    rejectCode?: RejectCode | null
+  ): void => {
+    metrics?.recordCommand({
+      scope: "lobby",
+      kind: routeType,
+      outcome,
+      latencyMs: elapsedSince(startedAtMs),
+      rejectCode: rejectCode ?? null
+    });
+  };
+  const recordReconnectAttempt = (): void => {
+    if (routeType !== "lobby.join") {
+      return;
+    }
+    reconnectAttempted = true;
+    metrics?.recordReconnectAttempt({
+      transport: "http"
+    });
+  };
+  const recordReconnectSuccess = (): void => {
+    if (!reconnectAttempted) {
+      return;
+    }
+    metrics?.recordReconnectSuccess({
+      transport: "http"
+    });
+  };
+  const recordReconnectFailure = (reason: string): void => {
+    if (!reconnectAttempted) {
+      return;
+    }
+    metrics?.recordReconnectFailure({
+      transport: "http",
+      reason
+    });
+  };
+
   const bodyResult = await readJsonBody(request);
   if (!bodyResult.ok) {
+    recordCommand("rejected", "INVALID_ACTION");
     logger.logReject({
       code: "INVALID_ACTION",
       message: bodyResult.message,
@@ -130,6 +179,14 @@ async function handleLobbyRoute(
     return;
   }
 
+  if (
+    routeType === "lobby.join" &&
+    typeof bodyResult.data.reconnectToken === "string" &&
+    bodyResult.data.reconnectToken.trim().length > 0
+  ) {
+    recordReconnectAttempt();
+  }
+
   const requestId = resolveRequestId(request, bodyResult.data);
   const candidate = {
     version: PROTOCOL_VERSION,
@@ -139,6 +196,8 @@ async function handleLobbyRoute(
   };
   const validated = validateClientToServerEvent(candidate);
   if (!validated.ok) {
+    recordCommand("rejected", "INVALID_ACTION");
+    recordReconnectFailure("INVALID_ACTION");
     logger.logReject({
       code: "INVALID_ACTION",
       message: validated.issues.join(" "),
@@ -160,6 +219,8 @@ async function handleLobbyRoute(
 
   const mapped = toDomainCommand(validated.data);
   if (!mapped.ok) {
+    recordCommand("rejected", mapped.reject.code);
+    recordReconnectFailure(mapped.reject.code);
     logger.logReject({
       code: mapped.reject.code,
       message: mapped.reject.message,
@@ -177,6 +238,8 @@ async function handleLobbyRoute(
     return;
   }
   if (!isLobbyCommand(mapped.data)) {
+    recordCommand("rejected", "INVALID_ACTION");
+    recordReconnectFailure("INVALID_ACTION");
     logger.logReject({
       code: "INVALID_ACTION",
       message: `Unsupported command kind "${mapped.data.kind}" for ${routeType}.`,
@@ -198,6 +261,8 @@ async function handleLobbyRoute(
   const correlation = correlationFromLobbyCommand(mapped.data);
   const dispatched = await dispatchCommand(mapped.data, validated.data);
   if (!dispatched.ok) {
+    recordCommand("rejected", dispatched.code);
+    recordReconnectFailure(dispatched.code);
     logger.logReject({
       code: dispatched.code,
       message: dispatched.message,
@@ -218,6 +283,9 @@ async function handleLobbyRoute(
     return;
   }
 
+  recordCommand("accepted");
+  recordReconnectSuccess();
+  metrics?.observeOutbound(dispatched.outbound);
   logger.logLobbyAction({
     action: mapped.data.kind,
     outcome: "accepted",
@@ -252,6 +320,7 @@ async function handleLobbyRoute(
 export function createLobbyRoutes(options: LobbyRoutesOptions = {}): RouteDefinition[] {
   const dispatchCommand = options.dispatchCommand ?? DEFAULT_LOBBY_DISPATCHER;
   const logger = options.logger ?? createNoopLogger();
+  const metrics = options.metrics;
 
   return [
     {
@@ -262,6 +331,7 @@ export function createLobbyRoutes(options: LobbyRoutesOptions = {}): RouteDefini
           "lobby.create",
           dispatchCommand,
           logger,
+          metrics,
           request,
           response,
           (body) => ({
@@ -278,6 +348,7 @@ export function createLobbyRoutes(options: LobbyRoutesOptions = {}): RouteDefini
           "lobby.join",
           dispatchCommand,
           logger,
+          metrics,
           request,
           response,
           (body) => {
@@ -302,6 +373,7 @@ export function createLobbyRoutes(options: LobbyRoutesOptions = {}): RouteDefini
           "lobby.update_name",
           dispatchCommand,
           logger,
+          metrics,
           request,
           response,
           (body) => ({
@@ -320,6 +392,7 @@ export function createLobbyRoutes(options: LobbyRoutesOptions = {}): RouteDefini
           "lobby.start",
           dispatchCommand,
           logger,
+          metrics,
           request,
           response,
           (body) => ({

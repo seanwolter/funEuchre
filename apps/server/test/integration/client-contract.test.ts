@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Socket } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import {
+  RUNTIME_ENV_KEYS,
+  resolveRuntimeConfig
+} from "../../src/config/runtimeConfig.js";
 import { createAppServer } from "../../src/server.js";
 
 type JsonObject = Record<string, unknown>;
@@ -29,6 +36,11 @@ type WsCollector = {
   ) => Promise<JsonObject>;
 };
 
+type EventOrdering = {
+  sequence: number;
+  emittedAtMs: number;
+};
+
 function asJsonObject(input: unknown): JsonObject {
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     throw new Error("Expected JSON object.");
@@ -39,6 +51,13 @@ function asJsonObject(input: unknown): JsonObject {
 function asString(input: unknown, label: string): string {
   if (typeof input !== "string") {
     throw new Error(`Expected ${label} to be string.`);
+  }
+  return input;
+}
+
+function asNumber(input: unknown, label: string): number {
+  if (typeof input !== "number" || !Number.isFinite(input)) {
+    throw new Error(`Expected ${label} to be number.`);
   }
   return input;
 }
@@ -58,6 +77,30 @@ function requireOutbound(payload: JsonObject): JsonObject[] {
     throw new Error("Expected outbound array.");
   }
   return payload.outbound.map((entry) => asJsonObject(entry));
+}
+
+function requireOrdering(event: JsonObject): EventOrdering {
+  const ordering = asJsonObject(event.ordering);
+  const sequence = asNumber(ordering.sequence, "event.ordering.sequence");
+  const emittedAtMs = asNumber(ordering.emittedAtMs, "event.ordering.emittedAtMs");
+  if (!Number.isInteger(sequence) || sequence <= 0) {
+    throw new Error("Expected event.ordering.sequence to be a positive integer.");
+  }
+  if (!Number.isInteger(emittedAtMs) || emittedAtMs < 0) {
+    throw new Error("Expected event.ordering.emittedAtMs to be a non-negative integer.");
+  }
+  return {
+    sequence,
+    emittedAtMs
+  };
+}
+
+function assertStrictlyIncreasing(next: number, previous: number, label: string): void {
+  if (next <= previous) {
+    throw new Error(
+      `${label} sequence must increase strictly; received ${next} after ${previous}.`
+    );
+  }
 }
 
 function toWebSocketUrl(baseUrl: string, identity: SessionIdentity): string {
@@ -259,6 +302,9 @@ async function expectWebsocketParity(
   );
   const wsOutbound = protocolMessages(collector.messages).slice(0, expectedOutbound.length);
   assert.deepEqual(wsOutbound, expectedOutbound);
+  for (const event of wsOutbound) {
+    requireOrdering(event);
+  }
 }
 
 function requireGameIdFromOutbound(outbound: readonly JsonObject[]): string {
@@ -291,6 +337,13 @@ function requireSeatConnected(
   return (matched as JsonObject).connected === true;
 }
 
+function createPersistenceRuntimeConfig(snapshotPath: string) {
+  return resolveRuntimeConfig({
+    [RUNTIME_ENV_KEYS.persistenceMode]: "file",
+    [RUNTIME_ENV_KEYS.persistencePath]: snapshotPath
+  });
+}
+
 test("HTTP outbound envelopes and websocket events stay in contract parity for join/start/action/reconnect", async (t) => {
   const server = createAppServer();
   const started = await startServer(server);
@@ -306,6 +359,28 @@ test("HTTP outbound envelopes and websocket events stay in contract parity for j
   const hostIdentity = requireResponseIdentity(created.body);
   const createOutbound = requireOutbound(created.body);
   assert.deepEqual(createOutbound.map((event) => event.type), ["lobby.state"]);
+
+  let lastLobbySequence = 0;
+  let lastGameSequence = 0;
+  const assertOutboundSequenceProgression = (outbound: readonly JsonObject[]): void => {
+    for (const event of outbound) {
+      const type = event.type;
+      if (typeof type !== "string") {
+        throw new Error("Expected outbound event type to be a string.");
+      }
+      const ordering = requireOrdering(event);
+      if (type === "lobby.state") {
+        assertStrictlyIncreasing(ordering.sequence, lastLobbySequence, "lobby");
+        lastLobbySequence = ordering.sequence;
+        continue;
+      }
+      if (type === "game.state" || type === "action.rejected" || type === "system.notice") {
+        assertStrictlyIncreasing(ordering.sequence, lastGameSequence, "game");
+        lastGameSequence = ordering.sequence;
+      }
+    }
+  };
+  assertOutboundSequenceProgression(createOutbound);
 
   const hostConnected = await connectWebSocket(
     toWebSocketUrl(started.baseUrl, hostIdentity)
@@ -329,6 +404,7 @@ test("HTTP outbound envelopes and websocket events stay in contract parity for j
   const eastIdentity = requireResponseIdentity(eastJoin.body);
   const eastJoinOutbound = requireOutbound(eastJoin.body);
   assert.deepEqual(eastJoinOutbound.map((event) => event.type), ["lobby.state"]);
+  assertOutboundSequenceProgression(eastJoinOutbound);
   await expectWebsocketParity(hostCollector, eastJoinOutbound);
   hostCollector.clear();
 
@@ -340,6 +416,7 @@ test("HTTP outbound envelopes and websocket events stay in contract parity for j
   assert.equal(southJoin.status, 200);
   const southJoinOutbound = requireOutbound(southJoin.body);
   assert.deepEqual(southJoinOutbound.map((event) => event.type), ["lobby.state"]);
+  assertOutboundSequenceProgression(southJoinOutbound);
   await expectWebsocketParity(hostCollector, southJoinOutbound);
   hostCollector.clear();
 
@@ -351,6 +428,7 @@ test("HTTP outbound envelopes and websocket events stay in contract parity for j
   assert.equal(westJoin.status, 200);
   const westJoinOutbound = requireOutbound(westJoin.body);
   assert.deepEqual(westJoinOutbound.map((event) => event.type), ["lobby.state"]);
+  assertOutboundSequenceProgression(westJoinOutbound);
   await expectWebsocketParity(hostCollector, westJoinOutbound);
   hostCollector.clear();
 
@@ -362,6 +440,7 @@ test("HTTP outbound envelopes and websocket events stay in contract parity for j
   assert.equal(startedLobby.status, 200);
   const startOutbound = requireOutbound(startedLobby.body);
   assert.deepEqual(startOutbound.map((event) => event.type), ["lobby.state", "game.state"]);
+  assertOutboundSequenceProgression(startOutbound);
   await expectWebsocketParity(hostCollector, startOutbound);
   hostCollector.clear();
 
@@ -392,6 +471,7 @@ test("HTTP outbound envelopes and websocket events stay in contract parity for j
   assert.equal(passAction.status, 200);
   const passOutbound = requireOutbound(passAction.body);
   assert.deepEqual(passOutbound.map((event) => event.type), ["game.state"]);
+  assertOutboundSequenceProgression(passOutbound);
   await expectWebsocketParity(hostCollector, passOutbound);
   await expectWebsocketParity(eastCollector, passOutbound);
 
@@ -409,6 +489,7 @@ test("HTTP outbound envelopes and websocket events stay in contract parity for j
   assert.equal(illegalPlay.status, 200);
   const illegalPlayOutbound = requireOutbound(illegalPlay.body);
   assert.deepEqual(illegalPlayOutbound.map((event) => event.type), ["action.rejected"]);
+  assertOutboundSequenceProgression(illegalPlayOutbound);
   await expectWebsocketParity(hostCollector, illegalPlayOutbound);
   await expectWebsocketParity(eastCollector, illegalPlayOutbound);
 
@@ -439,5 +520,55 @@ test("HTTP outbound envelopes and websocket events stay in contract parity for j
     "lobby.state",
     "game.state"
   ]);
+  assertOutboundSequenceProgression(reconnectOutbound);
   await expectWebsocketParity(hostCollector, reconnectOutbound);
+});
+
+test("checkpoint persistence keeps realtime parity and writes snapshots during active runtime", async (t) => {
+  const snapshotDir = mkdtempSync(join(tmpdir(), "fun-euchre-contract-checkpoint-"));
+  const snapshotPath = join(snapshotDir, "runtime-snapshot.json");
+  const runtimeConfig = createPersistenceRuntimeConfig(snapshotPath);
+
+  const server = createAppServer({ runtimeConfig });
+  const started = await startServer(server);
+  t.after(async () => {
+    await started.close();
+  });
+
+  const created = await postJson(started.baseUrl, "/lobbies/create", {
+    requestId: "contract-checkpoint-create",
+    displayName: "Host"
+  });
+  assert.equal(created.status, 200);
+  const hostIdentity = requireResponseIdentity(created.body);
+
+  const hostConnected = await connectWebSocket(
+    toWebSocketUrl(started.baseUrl, hostIdentity)
+  );
+  const hostSocket = hostConnected.socket;
+  const hostCollector = hostConnected.collector;
+  t.after(async () => {
+    await closeWebSocket(hostSocket);
+  });
+  await hostCollector.waitFor((message) => message.type === "ws.ready");
+  hostSocket.send(JSON.stringify({ type: "subscribe", payload: {} }));
+  await hostCollector.waitFor((message) => message.type === "ws.subscribed");
+  hostCollector.clear();
+
+  const eastJoin = await postJson(started.baseUrl, "/lobbies/join", {
+    requestId: "contract-checkpoint-join-east",
+    lobbyId: hostIdentity.lobbyId,
+    displayName: "East"
+  });
+  assert.equal(eastJoin.status, 200);
+  const eastJoinOutbound = requireOutbound(eastJoin.body);
+  await expectWebsocketParity(hostCollector, eastJoinOutbound);
+
+  await delay(300);
+  assert.equal(existsSync(snapshotPath), true);
+  const rawSnapshot = readFileSync(snapshotPath, "utf8");
+  const snapshot = asJsonObject(JSON.parse(rawSnapshot));
+  assert.equal(snapshot.schema, "fun-euchre.runtime.snapshot");
+  assert.equal(Array.isArray(snapshot.lobbyRecords), true);
+  assert.equal(Array.isArray(snapshot.sessionRecords), true);
 });

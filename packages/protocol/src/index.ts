@@ -115,6 +115,11 @@ export type SystemNoticePayload = {
   message: string;
 };
 
+export type ServerEventOrdering = {
+  sequence: number;
+  emittedAtMs: number;
+};
+
 type ClientEventBase<TType extends string, TPayload> = {
   version: typeof PROTOCOL_VERSION;
   type: TType;
@@ -125,6 +130,7 @@ type ClientEventBase<TType extends string, TPayload> = {
 type ServerEventBase<TType extends string, TPayload> = {
   version: typeof PROTOCOL_VERSION;
   type: TType;
+  ordering?: ServerEventOrdering;
   payload: TPayload;
 };
 
@@ -540,6 +546,23 @@ function parseGameLegalActions(input: unknown): GameLegalActionsPayload | null {
   };
 }
 
+function parseServerEventOrdering(input: unknown): ServerEventOrdering | null {
+  if (!isRecord(input)) {
+    return null;
+  }
+
+  const sequence = asNonNegativeInteger(input.sequence);
+  const emittedAtMs = asNonNegativeInteger(input.emittedAtMs);
+  if (sequence === null || sequence <= 0 || emittedAtMs === null) {
+    return null;
+  }
+
+  return {
+    sequence,
+    emittedAtMs
+  };
+}
+
 function parseClientBase(
   input: unknown
 ): ValidationResult<{ type: string; requestId: string; payload: Record<string, unknown> }> {
@@ -572,7 +595,11 @@ function parseClientBase(
 
 function parseServerBase(
   input: unknown
-): ValidationResult<{ type: string; payload: Record<string, unknown> }> {
+): ValidationResult<{
+  type: string;
+  ordering: ServerEventOrdering;
+  payload: Record<string, unknown>;
+}> {
   if (!isRecord(input)) {
     return fail("Server event must be an object.");
   }
@@ -587,12 +614,19 @@ function parseServerBase(
     return fail("Server event type must be a string.");
   }
 
+  const ordering = parseServerEventOrdering(input.ordering);
+  if (ordering === null) {
+    return fail(
+      "Server event ordering must include positive integer sequence and non-negative emittedAtMs."
+    );
+  }
+
   const payload = input.payload;
   if (!isRecord(payload)) {
     return fail("Server event payload must be an object.");
   }
 
-  return ok({ type, payload });
+  return ok({ type, ordering, payload });
 }
 
 export function validateClientToServerEvent(
@@ -789,7 +823,7 @@ export function validateServerToClientEvent(
     return base;
   }
 
-  const { type, payload } = base.data;
+  const { type, ordering, payload } = base.data;
 
   switch (type) {
     case "lobby.state": {
@@ -811,6 +845,7 @@ export function validateServerToClientEvent(
       return ok({
         version: PROTOCOL_VERSION,
         type,
+        ordering,
         payload: { lobbyId, hostPlayerId, phase, seats }
       });
     }
@@ -942,6 +977,7 @@ export function validateServerToClientEvent(
       return ok({
         version: PROTOCOL_VERSION,
         type,
+        ordering,
         payload: statePayload
       });
     }
@@ -967,6 +1003,7 @@ export function validateServerToClientEvent(
       return ok({
         version: PROTOCOL_VERSION,
         type,
+        ordering,
         payload: {
           gameId,
           seat,
@@ -990,6 +1027,7 @@ export function validateServerToClientEvent(
       return ok({
         version: PROTOCOL_VERSION,
         type,
+        ordering,
         payload: { code, message, requestId }
       });
     }
@@ -1004,6 +1042,7 @@ export function validateServerToClientEvent(
       return ok({
         version: PROTOCOL_VERSION,
         type,
+        ordering,
         payload: { severity, message }
       });
     }

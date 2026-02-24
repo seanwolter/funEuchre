@@ -1,4 +1,5 @@
 import type { LobbyState } from "./lobby.js";
+import type { RuntimeLobbyStorePort } from "./runtimePorts.js";
 import type { LobbyId, PlayerId } from "./types.js";
 
 type Clock = () => number;
@@ -43,7 +44,7 @@ function cloneRecord(record: LobbyStoreRecord): LobbyStoreRecord {
   };
 }
 
-export class InMemoryLobbyStore {
+export class InMemoryLobbyStore implements RuntimeLobbyStorePort {
   private readonly clock: Clock;
   private readonly ttlMs: number | null;
   private readonly byLobbyId = new Map<LobbyId, LobbyStoreRecord>();
@@ -101,6 +102,21 @@ export class InMemoryLobbyStore {
     this.byLobbyId.delete(lobbyId);
     this.clearPlayerIndex(record.state);
     return true;
+  }
+
+  listRecords(): LobbyStoreRecord[] {
+    return [...this.byLobbyId.values()].map((record) => cloneRecord(record));
+  }
+
+  replaceAll(records: readonly LobbyStoreRecord[]): void {
+    this.byLobbyId.clear();
+    this.lobbyByPlayerId.clear();
+
+    for (const record of records) {
+      const cloned = cloneRecord(record);
+      this.byLobbyId.set(cloned.lobbyId, cloned);
+      this.setPlayerIndex(cloned.state);
+    }
   }
 
   isExpired(record: Pick<LobbyStoreRecord, "updatedAtMs">, nowMs = this.clock()): boolean {

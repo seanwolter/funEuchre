@@ -6,27 +6,13 @@ import type {
 import type { GameState } from "@fun-euchre/game-rules";
 import type { LobbyId } from "./types.js";
 import type { GameId } from "./types.js";
+import type { RuntimeGameStorePort } from "./runtimePorts.js";
 import {
   applyProtocolEventToGameState,
   toGamePrivateStateEventsBySeat,
   toActionRejectedEvent,
   type GameEventApplyResult
 } from "./protocolAdapter.js";
-
-type GameStoreSnapshot = {
-  gameId: GameId;
-  lobbyId: LobbyId;
-  state: GameState;
-};
-
-type GameStorePort = {
-  getByGameId(gameId: GameId): GameStoreSnapshot | null;
-  upsert(input: {
-    gameId: GameId;
-    lobbyId: LobbyId;
-    state: GameState;
-  }): unknown;
-};
 
 type ProcessGameEventInput = {
   gameId: GameId;
@@ -38,9 +24,19 @@ export type ProcessGameEvent = (
   input: ProcessGameEventInput
 ) => GameEventApplyResult | Promise<GameEventApplyResult>;
 
+export type GameStatePersistedInput = {
+  gameId: GameId;
+  lobbyId: LobbyId;
+  requestId: string;
+  state: GameState;
+};
+
+export type GameStatePersistedCallback = (input: GameStatePersistedInput) => void;
+
 export type GameManagerOptions = {
-  gameStore: GameStorePort;
+  gameStore: RuntimeGameStorePort;
   processGameEvent?: ProcessGameEvent;
+  onStatePersisted?: GameStatePersistedCallback;
   maxTrackedRequestIdsPerGame?: number;
 };
 
@@ -61,8 +57,9 @@ type RequestHistory = {
 const DEFAULT_MAX_TRACKED_REQUEST_IDS = 512;
 
 export class GameManager {
-  private readonly gameStore: GameStorePort;
+  private readonly gameStore: RuntimeGameStorePort;
   private readonly processGameEvent: ProcessGameEvent;
+  private readonly onStatePersisted: GameStatePersistedCallback | null;
   private readonly maxTrackedRequestIdsPerGame: number;
   private readonly laneByGameId = new Map<GameId, Promise<void>>();
   private readonly requestHistoryByGameId = new Map<GameId, RequestHistory>();
@@ -72,6 +69,7 @@ export class GameManager {
     this.processGameEvent =
       options.processGameEvent ??
       ((input) => applyProtocolEventToGameState(input.gameId, input.state, input.event));
+    this.onStatePersisted = options.onStatePersisted ?? null;
     this.maxTrackedRequestIdsPerGame =
       options.maxTrackedRequestIdsPerGame ?? DEFAULT_MAX_TRACKED_REQUEST_IDS;
     if (
@@ -157,6 +155,12 @@ export class GameManager {
       this.gameStore.upsert({
         gameId: game.gameId,
         lobbyId: game.lobbyId,
+        state: result.state
+      });
+      this.onStatePersisted?.({
+        gameId: game.gameId,
+        lobbyId: game.lobbyId,
+        requestId: event.requestId,
         state: result.state
       });
     }

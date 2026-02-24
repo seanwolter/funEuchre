@@ -1,27 +1,21 @@
 # @fun-euchre/server
 
-Authoritative multiplayer Euchre server runtime.
+Authoritative multiplayer Euchre runtime.
 
-This README documents the current runtime wiring, HTTP + realtime contracts, local verification flow, and reconnect troubleshooting.
+This README covers Phase 5 runtime hardening: validated config, persistence/restart behavior, reconnect-forfeit automation, secure reconnect tokens, metrics, and operational verification.
 
 ## Runtime Wiring
 
-`createAppServer()` now wires a default runtime orchestrator by default:
+`createAppServer()` composes the default runtime stack:
 
-- `apps/server/src/runtime/orchestrator.ts`
-- `apps/server/src/runtime/dispatchers.ts`
-- `apps/server/src/realtime/socketServer.ts`
-- `apps/server/src/realtime/wsServer.ts`
+- runtime orchestrator: `apps/server/src/runtime/orchestrator.ts`
+- domain dispatchers: `apps/server/src/runtime/dispatchers.ts`
+- persistence checkpointing: `apps/server/src/runtime/persistence/*`
+- lifecycle sweeper: `apps/server/src/runtime/reconnectLifecycleSweeper.ts`
+- realtime transport: `apps/server/src/realtime/{socketServer,wsServer}.ts`
+- observability: `apps/server/src/observability/{logger,metrics}.ts`
 
-Default orchestration composes:
-
-- in-memory lobby/game/session stores,
-- reconnect policy,
-- authoritative game manager,
-- lobby/game command dispatchers,
-- websocket transport bridge.
-
-This means lobby and action endpoints are live without custom dispatcher injection.
+Default runtime is live for lobby/action endpoints without custom dispatcher injection.
 
 ## Local Run
 
@@ -32,127 +26,77 @@ pnpm install
 pnpm --filter @fun-euchre/server dev
 ```
 
-Or from `apps/server`:
-
-```bash
-pnpm dev
-```
-
 Default bind:
 
 - host: `0.0.0.0`
-- port: `3000` (override with `PORT`)
+- port: `3000` (`PORT` overrides)
 
-Health check:
+Quick checks:
 
 ```bash
-curl -i http://127.0.0.1:3000/health
+curl -sSf http://127.0.0.1:3000/health
+curl -sSf http://127.0.0.1:3000/metrics
 ```
 
-## HTTP Contract
+## Runtime Hardening Configuration
+
+Environment keys are validated at startup by `resolveRuntimeConfig(...)`.
+
+| Env key | Default | Constraints | Purpose |
+| --- | --- | --- | --- |
+| `FUN_EUCHRE_RECONNECT_GRACE_MS` | `60000` | integer >= `60000` | reconnect grace window before forfeit |
+| `FUN_EUCHRE_GAME_RETENTION_MS` | `900000` | integer >= `900000` | retention window for disconnected sessions and inactive state |
+| `FUN_EUCHRE_SESSION_TTL_MS` | `null` | integer >= `1` or `null/none/off/disabled` | optional TTL prune for connected sessions |
+| `FUN_EUCHRE_LOBBY_TTL_MS` | `null` | integer >= `1` or `null/none/off/disabled` | optional TTL prune for lobby records |
+| `FUN_EUCHRE_GAME_TTL_MS` | `null` | integer >= `1` or `null/none/off/disabled` | optional TTL prune for game records |
+| `FUN_EUCHRE_LIFECYCLE_SWEEP_INTERVAL_MS` | `5000` | integer >= `1000` | reconnect/retention sweep interval |
+| `FUN_EUCHRE_PERSISTENCE_MODE` | `disabled` | `disabled` or `file` | runtime snapshot persistence strategy |
+| `FUN_EUCHRE_PERSISTENCE_PATH` | `./var/fun-euchre/runtime-snapshot.json` | non-empty path (when mode=`file`) | snapshot file location |
+| `FUN_EUCHRE_RECONNECT_TOKEN_SECRET` | random process secret | non-empty string when set | stable HMAC secret for reconnect token verification |
+
+Important: if `FUN_EUCHRE_RECONNECT_TOKEN_SECRET` is not set, a process-random fallback secret is used. Tokens issued before restart will not verify after restart.
+
+Example production-like local run:
+
+```bash
+FUN_EUCHRE_PERSISTENCE_MODE=file \
+FUN_EUCHRE_PERSISTENCE_PATH=./var/fun-euchre/runtime-snapshot.json \
+FUN_EUCHRE_RECONNECT_TOKEN_SECRET=replace-with-long-random-secret \
+pnpm --filter @fun-euchre/server dev
+```
+
+## HTTP and Realtime Contract
 
 Base URL: `http://127.0.0.1:3000`
 
-### Endpoints
+### HTTP endpoints
 
 - `GET /health`
 - `HEAD /health`
+- `GET /metrics`
+- `HEAD /metrics`
 - `POST /lobbies/create`
 - `POST /lobbies/join`
 - `POST /lobbies/update-name`
 - `POST /lobbies/start`
 - `POST /actions`
 
-### Command Request IDs
+### Status code mapping
 
-`requestId` resolution order:
-
-1. request body `requestId` (if non-empty)
-2. `x-request-id` header (if present)
-3. generated UUID
-
-### Success Envelope
-
-All command endpoints return:
-
-```json
-{
-  "requestId": "req-123",
-  "outbound": [
-    {
-      "version": 1,
-      "type": "lobby.state",
-      "payload": {}
-    }
-  ]
-}
-```
-
-`/lobbies/create` and `/lobbies/join` also return `identity`:
-
-```json
-{
-  "requestId": "req-123",
-  "identity": {
-    "lobbyId": "lobby-1",
-    "playerId": "player-1",
-    "sessionId": "session-1",
-    "reconnectToken": "token-1"
-  },
-  "outbound": []
-}
-```
-
-### Error Envelope
-
-```json
-{
-  "requestId": "req-123",
-  "error": {
-    "code": "INVALID_ACTION",
-    "message": "Human-readable message.",
-    "issues": ["Optional validation details"]
-  }
-}
-```
-
-Status mapping:
+HTTP command rejects:
 
 - `400` => `INVALID_ACTION`
 - `403` => `UNAUTHORIZED`
 - `409` => `INVALID_STATE` / `NOT_YOUR_TURN`
 
-### Supported Client Events (`POST /actions`)
+WebSocket upgrade (`/realtime/ws`) failures:
 
-- `game.pass`
-- `game.order_up`
-- `game.call_trump`
-- `game.play_card`
+- `400` malformed request/frame
+- `401` invalid session id or reconnect token
+- `403` reconnect window expired (forfeit due)
+- `404` wrong upgrade path
 
-### Outbound Server Events
-
-- `lobby.state`
-- `game.state`
-- `action.rejected`
-- `system.notice`
-
-## Realtime WebSocket Contract
-
-Endpoint:
-
-- `GET /realtime/ws?sessionId=<id>&reconnectToken=<token>`
-
-Upgrade prerequisites:
-
-- valid session id,
-- reconnect token matches session,
-- reconnect window has not forfeited.
-
-Server control messages:
-
-- `ws.ready`
-- `ws.subscribed`
-- `ws.error`
+### Realtime subscribe contract
 
 Client message:
 
@@ -161,54 +105,105 @@ Client message:
   "type": "subscribe",
   "requestId": "req-1",
   "payload": {
-    "lobbyId": "lobby-1",
-    "gameId": "game-1"
+    "lobbyId": "runtime-lobby-...",
+    "gameId": "runtime-game-..."
   }
 }
 ```
 
 Rules:
 
-- `lobbyId` must match the session's lobby.
-- optional `gameId` must match the session's bound game.
-- outbound protocol events (`lobby.state`, `game.state`, etc.) are sent as top-level websocket JSON messages.
+- `lobbyId` must match the authenticated session lobby.
+- optional `gameId` must match the authenticated session game.
+- outbound protocol events are delivered as top-level websocket JSON messages.
 
-## Multi-Client Smoke Workflow
+## Persistence Semantics
 
-1. Start server and web app.
-2. In browser A, create a lobby.
-3. In browser B/C/D (separate profiles/incognito), join same lobby.
-4. Start game from host.
-5. Submit at least one bidding action (`pass`) and one gameplay action attempt.
-6. Close browser B tab, confirm host sees B disconnected.
-7. Reopen browser B and rejoin using reconnect token; confirm seat reconnects.
+When `FUN_EUCHRE_PERSISTENCE_MODE=file`:
 
-Useful curl snippets:
+1. Server loads snapshot from `FUN_EUCHRE_PERSISTENCE_PATH` on startup.
+2. Corrupt/unsupported snapshots fail safe with lifecycle log detail and empty-state fallback.
+3. Checkpoints are requested after accepted lobby/game/session transitions and lifecycle sweep changes.
+4. Checkpoint writes are debounced (`75ms`) to reduce write amplification.
+5. Server close performs a final snapshot write attempt.
 
-```bash
-curl -s http://127.0.0.1:3000/health
+Snapshot schema is versioned in `apps/server/src/runtime/persistence/runtimeSnapshot.ts`.
+
+Rehydration behavior: restored sessions/lobby seats are normalized to disconnected state and receive a fresh reconnect deadline from current startup time.
+
+## Reconnect/Forfeit Automation
+
+`ReconnectLifecycleSweeper` runs every `FUN_EUCHRE_LIFECYCLE_SWEEP_INTERVAL_MS` and executes `runLifecycleSweep()`:
+
+- evaluates disconnected sessions,
+- applies automatic forfeit when reconnect grace is exceeded,
+- emits forfeit notice + terminal `game.state`,
+- prunes expired session/game/lobby records by retention and optional TTL rules,
+- requests persistence checkpoint when state changes.
+
+Forfeit transition behavior is defined in `resolveReconnectForfeit(...)`.
+
+## Metrics Endpoint and Interpretation
+
+`GET /metrics` returns read-only JSON metrics intended for local diagnostics and future scraping.
+
+Shape (abbreviated):
+
+```json
+{
+  "generatedAtMs": 1771960000000,
+  "counters": {
+    "commands": {
+      "total": 0,
+      "accepted": 0,
+      "rejected": 0,
+      "rejectionRate": 0,
+      "rejectionsByCode": {},
+      "byKind": {}
+    },
+    "reconnect": {
+      "attempted": 0,
+      "successful": 0,
+      "failed": 0,
+      "successRate": 0,
+      "byTransport": {
+        "http": { "attempted": 0, "successful": 0, "failed": 0 },
+        "websocket": { "attempted": 0, "successful": 0, "failed": 0 }
+      },
+      "failuresByReason": {}
+    },
+    "sessions": { "active": 0, "peak": 0 },
+    "games": { "started": 0, "completed": 0, "forfeits": 0 }
+  },
+  "latencyMs": {
+    "commands": {
+      "count": 0,
+      "totalMs": 0,
+      "averageMs": null,
+      "minMs": null,
+      "maxMs": null
+    }
+  }
+}
 ```
 
-```bash
-curl -s -X POST http://127.0.0.1:3000/lobbies/create \
-  -H 'content-type: application/json' \
-  -d '{"requestId":"smoke-create","displayName":"Host"}'
-```
+Interpretation notes:
 
-## Reconnect Troubleshooting
+- `commands.*` includes lobby and `/actions` command paths.
+- `commands.byKind` keys are `scope:kind` (example: `lobby:lobby.join`, `actions:game.pass`).
+- `reconnect.*` counts both HTTP reconnect joins and websocket upgrades.
+- `sessions.active`/`sessions.peak` track active websocket sessions.
+- `games.forfeits` increments when a forfeit notice is observed with a terminal game completion event.
 
-- `UNAUTHORIZED` on `/lobbies/join` with reconnect token:
-  - token does not exist, does not match session, or belongs to another lobby.
-- `INVALID_STATE` on reconnect join:
-  - reconnect window expired and seat forfeited.
-- websocket `401 Unauthorized` during upgrade:
-  - invalid `sessionId` or `reconnectToken` query params.
-- websocket `403 Forbidden` during upgrade:
-  - reconnect policy already marked session forfeit.
-- repeated websocket disconnects:
-  - check that each client uses its latest `sessionId` + `reconnectToken` pair.
+## Troubleshooting
 
-## Test Commands
+Use `docs/operations/runbook.md` for incident playbooks:
+
+- reconnect storms and token failures,
+- stale/corrupt snapshot recovery,
+- websocket transport incident triage.
+
+## Hardening Test Matrix
 
 From repo root:
 
@@ -217,10 +212,14 @@ pnpm --filter @fun-euchre/server test
 pnpm --filter @fun-euchre/server typecheck
 ```
 
-Contract/integration suites include:
+High-signal suites:
 
-- `apps/server/test/integration/runtime-wiring.test.ts`
-- `apps/server/test/integration/gameplay-lifecycle.test.ts`
+- `apps/server/test/runtime-config.test.ts`
+- `apps/server/test/integration/runtime-persistence.test.ts`
 - `apps/server/test/integration/reconnect-lifecycle.test.ts`
-- `apps/server/test/integration/client-contract.test.ts`
+- `apps/server/test/integration/reconnect-forfeit-runtime.test.ts`
+- `apps/server/test/security-token.test.ts`
+- `apps/server/test/realtime-broker-contract.test.ts`
 - `apps/server/test/realtime-transport.test.ts`
+- `apps/server/test/metrics.test.ts`
+- `apps/server/test/integration/client-contract.test.ts`

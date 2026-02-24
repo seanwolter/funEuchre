@@ -91,6 +91,10 @@ test("validateServerToClientEvent accepts game.state payload", () => {
     const result = validateServerToClientEvent({
         version: PROTOCOL_VERSION,
         type: "game.state",
+        ordering: {
+            sequence: 1,
+            emittedAtMs: 1_700_000_000_001
+        },
         payload: {
             gameId: "game-1",
             handNumber: 2,
@@ -133,6 +137,10 @@ test("validateServerToClientEvent accepts game.private_state payload", () => {
     const result = validateServerToClientEvent({
         version: PROTOCOL_VERSION,
         type: "game.private_state",
+        ordering: {
+            sequence: 2,
+            emittedAtMs: 1_700_000_000_002
+        },
         payload: {
             gameId: "game-1",
             seat: "north",
@@ -168,6 +176,10 @@ test("parse functions throw on invalid payloads", () => {
         parseServerToClientEvent({
             version: PROTOCOL_VERSION,
             type: "system.notice",
+            ordering: {
+                sequence: 3,
+                emittedAtMs: 1_700_000_000_003
+            },
             payload: {
                 severity: "fatal",
                 message: "bad"

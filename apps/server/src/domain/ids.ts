@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type {
   DomainIdFactory,
   GameId,
@@ -8,10 +9,18 @@ import type {
 } from "./types.js";
 
 const IDENTIFIER_PATTERN = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/i;
+const LEGACY_RECONNECT_TOKEN_PATTERN = IDENTIFIER_PATTERN;
+const SIGNED_RECONNECT_TOKEN_PATTERN =
+  /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
 type IncrementalIdFactoryOptions = {
   prefix?: string;
   startAt?: number;
+};
+
+type SecureIdFactoryOptions = {
+  prefix?: string;
+  randomBytesFactory?: (size: number) => Buffer;
 };
 
 function asIdentifier(input: unknown): string | null {
@@ -61,7 +70,22 @@ export function parseSessionId(input: unknown): SessionId | null {
 }
 
 export function parseReconnectToken(input: unknown): ReconnectToken | null {
-  return asDomainId<ReconnectToken>(input);
+  if (typeof input !== "string") {
+    return null;
+  }
+
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (
+    !LEGACY_RECONNECT_TOKEN_PATTERN.test(trimmed) &&
+    !SIGNED_RECONNECT_TOKEN_PATTERN.test(trimmed)
+  ) {
+    return null;
+  }
+
+  return trimmed as ReconnectToken;
 }
 
 export function parseLobbyIdOrThrow(input: unknown): LobbyId {
@@ -81,7 +105,12 @@ export function parseSessionIdOrThrow(input: unknown): SessionId {
 }
 
 export function parseReconnectTokenOrThrow(input: unknown): ReconnectToken {
-  return mustParse<ReconnectToken>("reconnectToken", input);
+  const parsed = parseReconnectToken(input);
+  if (!parsed) {
+    throw new Error("Invalid reconnectToken.");
+  }
+
+  return parsed;
 }
 
 export function isLobbyId(input: unknown): input is LobbyId {
@@ -124,5 +153,24 @@ export function createIncrementalIdFactory(
     nextPlayerId: () => parsePlayerIdOrThrow(nextValue("player")),
     nextSessionId: () => parseSessionIdOrThrow(nextValue("session")),
     nextReconnectToken: () => parseReconnectTokenOrThrow(nextValue("reconnect"))
+  };
+}
+
+export function createSecureIdFactory(
+  options: SecureIdFactoryOptions = {}
+): DomainIdFactory {
+  const prefix = options.prefix ?? "runtime";
+  const randomBytesFactory = options.randomBytesFactory ?? randomBytes;
+
+  function nextSecureValue(kind: string): string {
+    return `${prefix}-${kind}-${randomBytesFactory(12).toString("hex")}`;
+  }
+
+  return {
+    nextLobbyId: () => parseLobbyIdOrThrow(nextSecureValue("lobby")),
+    nextGameId: () => parseGameIdOrThrow(nextSecureValue("game")),
+    nextPlayerId: () => parsePlayerIdOrThrow(nextSecureValue("player")),
+    nextSessionId: () => parseSessionIdOrThrow(nextSecureValue("session")),
+    nextReconnectToken: () => parseReconnectTokenOrThrow(nextSecureValue("reconnect"))
   };
 }

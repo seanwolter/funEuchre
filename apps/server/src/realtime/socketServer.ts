@@ -1,81 +1,93 @@
 import type { ServerToClientEvent } from "@fun-euchre/protocol";
+import type {
+  RuntimePublishResult,
+  RuntimeRealtimeFanoutPort,
+  RuntimeRealtimeRoomId,
+  RuntimeSocketSessionConnection
+} from "../domain/runtimePorts.js";
 import type { GameId, LobbyId, SessionId } from "../domain/types.js";
-import {
-  InMemoryEventHub,
-  gameRoomId,
-  lobbyRoomId,
-  type EventSink,
-  type PublishResult,
-  type RealtimeRoomId
-} from "./eventHub.js";
+import type { OperationalMetrics } from "../observability/metrics.js";
+import type { RealtimeBroker } from "./broker.js";
+import { gameRoomId, lobbyRoomId } from "./broker.js";
+import type { InMemoryEventHub } from "./eventHub.js";
+import { InMemoryRealtimeBroker } from "./inMemoryBroker.js";
 
-export type SocketSessionConnection = {
-  sessionId: SessionId;
-  send: EventSink;
-};
+export type SocketSessionConnection = RuntimeSocketSessionConnection;
 
 export type SocketServerOptions = {
+  broker?: RealtimeBroker;
   eventHub?: InMemoryEventHub;
+  metrics?: OperationalMetrics;
 };
 
-export class InMemorySocketServer {
-  private readonly eventHub: InMemoryEventHub;
+export class InMemorySocketServer implements RuntimeRealtimeFanoutPort {
+  private readonly broker: RealtimeBroker;
+  private readonly metrics: OperationalMetrics | null;
 
   constructor(options: SocketServerOptions = {}) {
-    this.eventHub = options.eventHub ?? new InMemoryEventHub();
+    this.broker = options.broker ?? options.eventHub ?? new InMemoryRealtimeBroker();
+    this.metrics = options.metrics ?? null;
   }
 
-  connectSession(connection: SocketSessionConnection): void {
-    this.eventHub.connectSession(connection);
+  connectSession(connection: RuntimeSocketSessionConnection): void {
+    this.broker.connectSession(connection);
   }
 
   hasSession(sessionId: SessionId): boolean {
-    return this.eventHub.hasSession(sessionId);
+    return this.broker.hasSession(sessionId);
   }
 
   disconnectSession(sessionId: SessionId): void {
-    this.eventHub.disconnectSession(sessionId);
+    this.broker.disconnectSession(sessionId);
   }
 
   bindSessionToLobby(sessionId: SessionId, lobbyId: LobbyId): boolean {
-    return this.eventHub.joinRoom(sessionId, lobbyRoomId(lobbyId));
+    return this.broker.joinRoom(sessionId, lobbyRoomId(lobbyId));
   }
 
   unbindSessionFromLobby(sessionId: SessionId, lobbyId: LobbyId): boolean {
-    return this.eventHub.leaveRoom(sessionId, lobbyRoomId(lobbyId));
+    return this.broker.leaveRoom(sessionId, lobbyRoomId(lobbyId));
   }
 
   bindSessionToGame(sessionId: SessionId, gameId: GameId): boolean {
-    return this.eventHub.joinRoom(sessionId, gameRoomId(gameId));
+    return this.broker.joinRoom(sessionId, gameRoomId(gameId));
   }
 
   unbindSessionFromGame(sessionId: SessionId, gameId: GameId): boolean {
-    return this.eventHub.leaveRoom(sessionId, gameRoomId(gameId));
+    return this.broker.leaveRoom(sessionId, gameRoomId(gameId));
   }
 
-  listSessionRooms(sessionId: SessionId): RealtimeRoomId[] {
-    return this.eventHub.listSessionRooms(sessionId);
+  listSessionRooms(sessionId: SessionId): RuntimeRealtimeRoomId[] {
+    return this.broker.listSessionRooms(sessionId);
   }
 
   async broadcastLobbyEvents(
     lobbyId: LobbyId,
     events: readonly ServerToClientEvent[]
-  ): Promise<PublishResult> {
-    return this.eventHub.publish({
+  ): Promise<RuntimePublishResult> {
+    const result = await this.broker.publish({
       source: "domain-transition",
       roomId: lobbyRoomId(lobbyId),
       events
     });
+    if (result.ok) {
+      this.metrics?.observeOutbound(events);
+    }
+    return result;
   }
 
   async broadcastGameEvents(
     gameId: GameId,
     events: readonly ServerToClientEvent[]
-  ): Promise<PublishResult> {
-    return this.eventHub.publish({
+  ): Promise<RuntimePublishResult> {
+    const result = await this.broker.publish({
       source: "domain-transition",
       roomId: gameRoomId(gameId),
       events
     });
+    if (result.ok) {
+      this.metrics?.observeOutbound(events);
+    }
+    return result;
   }
 }

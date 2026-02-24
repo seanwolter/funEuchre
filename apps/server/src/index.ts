@@ -1,10 +1,18 @@
+import {
+  resolveRuntimeConfig,
+  toRuntimeConfigLogMetadata
+} from "./config/runtimeConfig.js";
 import { DEFAULT_HOST, createAppServer, resolvePort } from "./server.js";
 import { createConsoleStructuredLogger } from "./observability/logger.js";
 
 const port = resolvePort(process.env.PORT);
 const host = process.env.HOST ?? DEFAULT_HOST;
 const logger = createConsoleStructuredLogger();
-const server = createAppServer({ logger });
+const runtimeConfig = resolveRuntimeConfig(process.env);
+const server = createAppServer({
+  logger,
+  runtimeConfig
+});
 
 server.listen(port, host, () => {
   logger.logServerLifecycle({
@@ -12,7 +20,8 @@ server.listen(port, host, () => {
     message: "fun-euchre server listening",
     metadata: {
       host,
-      port
+      port,
+      runtimeConfig: toRuntimeConfigLogMetadata(runtimeConfig)
     }
   });
 });

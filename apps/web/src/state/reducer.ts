@@ -19,6 +19,9 @@ export type ClientRuntimeState = {
   lobby: LobbyStatePayload | null;
   game: GameStatePayload | null;
   privateGame: GamePrivateStatePayload | null;
+  lastLobbySequence: number | null;
+  lastGameSequence: number | null;
+  lastPrivateGameSequence: number | null;
   notices: ClientNotice[];
   rejections: ClientActionRejection[];
   seenEventKeys: string[];
@@ -98,6 +101,23 @@ function eventKey(event: ServerToClientEvent): string {
   return stableSerialize(event);
 }
 
+function asPositiveInteger(input: unknown): number | null {
+  if (!Number.isInteger(input)) {
+    return null;
+  }
+  if ((input as number) <= 0) {
+    return null;
+  }
+  return input as number;
+}
+
+function eventSequence(event: ServerToClientEvent): number | null {
+  if (!event.ordering) {
+    return null;
+  }
+  return asPositiveInteger(event.ordering.sequence);
+}
+
 function boundedAppend<T>(list: readonly T[], nextEntry: T, maxLength: number): T[] {
   const nextList = [...list, nextEntry];
   if (nextList.length <= maxLength) {
@@ -109,10 +129,16 @@ function boundedAppend<T>(list: readonly T[], nextEntry: T, maxLength: number): 
 
 function isStaleLobbyState(
   current: LobbyStatePayload | null,
-  incoming: LobbyStatePayload
+  currentSequence: number | null,
+  incoming: LobbyStatePayload,
+  incomingSequence: number | null
 ): boolean {
   if (!current || current.lobbyId !== incoming.lobbyId) {
     return false;
+  }
+
+  if (incomingSequence !== null && currentSequence !== null) {
+    return incomingSequence <= currentSequence;
   }
 
   return LOBBY_PHASE_RANK[incoming.phase] < LOBBY_PHASE_RANK[current.phase];
@@ -135,10 +161,15 @@ function biddingPassCount(state: GameStatePayload): number {
 
 function isStaleGameState(
   current: GameStatePayload | null,
-  incoming: GameStatePayload
+  currentSequence: number | null,
+  incoming: GameStatePayload,
+  incomingSequence: number | null
 ): boolean {
   if (!current || current.gameId !== incoming.gameId) {
     return false;
+  }
+  if (incomingSequence !== null && currentSequence !== null) {
+    return incomingSequence <= currentSequence;
   }
   if (incoming.handNumber < current.handNumber) {
     return true;
@@ -175,10 +206,16 @@ function isStaleGameState(
 
 function isStalePrivateGameState(
   current: GamePrivateStatePayload | null,
-  incoming: GamePrivateStatePayload
+  currentSequence: number | null,
+  incoming: GamePrivateStatePayload,
+  incomingSequence: number | null
 ): boolean {
   if (!current || current.gameId !== incoming.gameId) {
     return false;
+  }
+
+  if (incomingSequence !== null && currentSequence !== null) {
+    return incomingSequence <= currentSequence;
   }
 
   return GAME_PHASE_RANK[incoming.phase] < GAME_PHASE_RANK[current.phase];
@@ -189,6 +226,9 @@ export function createInitialClientRuntimeState(): ClientRuntimeState {
     lobby: null,
     game: null,
     privateGame: null,
+    lastLobbySequence: null,
+    lastGameSequence: null,
+    lastPrivateGameSequence: null,
     notices: [],
     rejections: [],
     seenEventKeys: [],
@@ -204,6 +244,9 @@ export function cloneClientRuntimeState(state: ClientRuntimeState): ClientRuntim
     lobby: state.lobby ? cloneValue(state.lobby) : null,
     game: state.game ? cloneValue(state.game) : null,
     privateGame: state.privateGame ? cloneValue(state.privateGame) : null,
+    lastLobbySequence: state.lastLobbySequence,
+    lastGameSequence: state.lastGameSequence,
+    lastPrivateGameSequence: state.lastPrivateGameSequence,
     notices: state.notices.map((entry) => ({ ...entry })),
     rejections: state.rejections.map((entry) => ({ ...entry })),
     seenEventKeys: [...state.seenEventKeys],
@@ -240,6 +283,9 @@ export function reduceServerEvents(
   let lobby = state.lobby;
   let game = state.game;
   let privateGame = state.privateGame;
+  let lastLobbySequence = state.lastLobbySequence;
+  let lastGameSequence = state.lastGameSequence;
+  let lastPrivateGameSequence = state.lastPrivateGameSequence;
   let notices = state.notices;
   let rejections = state.rejections;
   let appliedCount = 0;
@@ -264,23 +310,35 @@ export function reduceServerEvents(
 
   for (const event of input.events) {
     const key = eventKey(event);
+    const incomingSequence = eventSequence(event);
     if (seenEventKeySet.has(key)) {
       ignoredDuplicateCount += 1;
       continue;
     }
     trackEventKey(key);
 
-    if (event.type === "lobby.state" && isStaleLobbyState(lobby, event.payload)) {
+    if (
+      event.type === "lobby.state" &&
+      isStaleLobbyState(lobby, lastLobbySequence, event.payload, incomingSequence)
+    ) {
       ignoredStaleCount += 1;
       continue;
     }
-    if (event.type === "game.state" && isStaleGameState(game, event.payload)) {
+    if (
+      event.type === "game.state" &&
+      isStaleGameState(game, lastGameSequence, event.payload, incomingSequence)
+    ) {
       ignoredStaleCount += 1;
       continue;
     }
     if (
       event.type === "game.private_state" &&
-      isStalePrivateGameState(privateGame, event.payload)
+      isStalePrivateGameState(
+        privateGame,
+        lastPrivateGameSequence,
+        event.payload,
+        incomingSequence
+      )
     ) {
       ignoredStaleCount += 1;
       continue;
@@ -290,15 +348,25 @@ export function reduceServerEvents(
     switch (event.type) {
       case "lobby.state":
         lobby = cloneValue(event.payload);
+        if (incomingSequence !== null) {
+          lastLobbySequence = incomingSequence;
+        }
         break;
       case "game.state":
         game = cloneValue(event.payload);
+        if (incomingSequence !== null) {
+          lastGameSequence = incomingSequence;
+        }
         if (privateGame && privateGame.gameId !== event.payload.gameId) {
           privateGame = null;
+          lastPrivateGameSequence = null;
         }
         break;
       case "game.private_state":
         privateGame = cloneValue(event.payload);
+        if (incomingSequence !== null) {
+          lastPrivateGameSequence = incomingSequence;
+        }
         break;
       case "system.notice":
         notices = boundedAppend(notices, { ...event.payload }, MAX_FEEDBACK_ITEMS);
@@ -327,6 +395,9 @@ export function reduceServerEvents(
       lobby,
       game,
       privateGame,
+      lastLobbySequence,
+      lastGameSequence,
+      lastPrivateGameSequence,
       notices,
       rejections,
       seenEventKeys: nextSeenEventKeys,

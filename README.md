@@ -51,6 +51,8 @@ pnpm --filter @fun-euchre/web test
 
 - Server runtime + transport contract: `apps/server/README.md`
 - Web runtime + client-state architecture: `apps/web/README.md`
+- Realtime broker contract and ordering semantics: `docs/architecture/realtime-distribution.md`
+- Operations runbook (incidents + triage): `docs/operations/runbook.md`
 
 ## Local Multi-Client Smoke Flow
 
@@ -61,7 +63,35 @@ pnpm --filter @fun-euchre/web test
 5. Disconnect one client and reconnect with stored reconnect token.
 6. Confirm all clients converge on the same lobby/game projections.
 
+## Phase 5 Hardening Validation
+
+Targeted commands:
+
+```bash
+pnpm --filter @fun-euchre/protocol test
+pnpm --filter @fun-euchre/server test
+pnpm --filter @fun-euchre/web test
+pnpm --filter @fun-euchre/server typecheck
+pnpm --filter @fun-euchre/web typecheck
+```
+
+Repository-wide gates:
+
+```bash
+pnpm lint
+pnpm typecheck
+pnpm test
+```
+
+Server quick checks after startup:
+
+```bash
+curl -sSf http://127.0.0.1:3000/health
+curl -sSf http://127.0.0.1:3000/metrics
+```
+
 ## Troubleshooting Links
 
 - Reconnect and websocket troubleshooting: `apps/server/README.md`
 - Client bootstrap/session troubleshooting: `apps/web/README.md`
+- Incident runbook: `docs/operations/runbook.md`

@@ -1,4 +1,5 @@
 import type { GameState } from "@fun-euchre/game-rules";
+import type { RuntimeGameStorePort } from "./runtimePorts.js";
 import type { GameId, LobbyId } from "./types.js";
 
 type Clock = () => number;
@@ -36,7 +37,7 @@ function cloneRecord(record: GameStoreRecord): GameStoreRecord {
   };
 }
 
-export class InMemoryGameStore {
+export class InMemoryGameStore implements RuntimeGameStorePort {
   private readonly clock: Clock;
   private readonly ttlMs: number | null;
   private readonly byGameId = new Map<GameId, GameStoreRecord>();
@@ -95,6 +96,21 @@ export class InMemoryGameStore {
     this.byGameId.delete(gameId);
     this.gameByLobbyId.delete(record.lobbyId);
     return true;
+  }
+
+  listRecords(): GameStoreRecord[] {
+    return [...this.byGameId.values()].map((record) => cloneRecord(record));
+  }
+
+  replaceAll(records: readonly GameStoreRecord[]): void {
+    this.byGameId.clear();
+    this.gameByLobbyId.clear();
+
+    for (const record of records) {
+      const cloned = cloneRecord(record);
+      this.byGameId.set(cloned.gameId, cloned);
+      this.gameByLobbyId.set(cloned.lobbyId, cloned.gameId);
+    }
   }
 
   isExpired(record: Pick<GameStoreRecord, "updatedAtMs">, nowMs = this.clock()): boolean {

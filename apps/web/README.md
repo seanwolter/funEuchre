@@ -1,8 +1,8 @@
 # @fun-euchre/web
 
-Browser client for the Fun Euchre MVP.
+Browser client for the funEuchre MVP.
 
-This document covers runtime architecture, local run workflow, multi-client smoke testing, and reconnect troubleshooting.
+This README documents runtime architecture, reconnect behavior, event-ordering guardrails, and validation workflows after Phase 5 hardening.
 
 ## Local Run
 
@@ -13,24 +13,20 @@ pnpm install
 pnpm --filter @fun-euchre/web dev
 ```
 
-Or from `apps/web`:
-
-```bash
-pnpm dev
-```
-
 Default dev URL: `http://127.0.0.1:5173`
+
+Server dependency: run `@fun-euchre/server` at `http://127.0.0.1:3000` unless `API_ORIGIN` is set.
 
 ### Cross-Device Dev Notes
 
-When sharing invites across devices, run with:
+For LAN invite testing:
 
 ```bash
 PUBLIC_ORIGIN=http://<lan-ip>:5173 API_ORIGIN=http://127.0.0.1:3000 pnpm --filter @fun-euchre/web dev
 ```
 
-- `PUBLIC_ORIGIN` controls the host embedded into invite links.
-- `API_ORIGIN` controls where the web dev server proxies `/lobbies/*`, `/actions`, and `/realtime/ws`.
+- `PUBLIC_ORIGIN` controls invite-link host.
+- `API_ORIGIN` controls proxy target for `/lobbies/*`, `/actions`, and `/realtime/ws`.
 
 ## Runtime Architecture
 
@@ -40,35 +36,23 @@ Entry point: `apps/web/src/main.tsx`
 
 Startup flow:
 
-1. create store, HTTP client, session client,
-2. run `bootstrapAppSession(...)` for auto-reconnect,
-3. route to `lobby`, `game`, or `help` page modules,
-4. pass bootstrap feedback into page mounts.
+1. create store, HTTP client, and session client,
+2. run `bootstrapAppSession(...)` to attempt reconnect,
+3. route to `lobby`, `game`, or `help` page,
+4. bind UI feedback to bootstrap/realtime state.
 
 ### Router + Pages
 
-- Router: `apps/web/src/app/router.ts`
-- Lobby page: `apps/web/src/pages/LobbyPage.tsx`
-- Game page: `apps/web/src/pages/GamePage.tsx`
-- Help page: `apps/web/src/pages/HelpPage.tsx`
-
-### Client State and Reducer
-
-- Store wrapper: `apps/web/src/state/gameStore.ts`
-- Reducer: `apps/web/src/state/reducer.ts`
-
-Both HTTP `outbound` events and websocket events flow through the same reducer path.
-
-Reducer behavior:
-
-- deterministic duplicate suppression (`seenEventKeys`),
-- stale projection rejection for lobby/game phase regression,
-- bounded notice/rejection history.
+- router: `apps/web/src/app/router.ts`
+- lobby page: `apps/web/src/pages/LobbyPage.tsx`
+- game page: `apps/web/src/pages/GamePage.tsx`
+- help page: `apps/web/src/pages/HelpPage.tsx`
 
 ### Transport Clients
 
-- HTTP client: `apps/web/src/lib/httpClient.ts`
-- Realtime client: `apps/web/src/realtime/client.ts`
+- HTTP: `apps/web/src/lib/httpClient.ts`
+- realtime websocket: `apps/web/src/realtime/client.ts`
+- session persistence: `apps/web/src/lib/session.ts`
 
 Realtime lifecycle states:
 
@@ -79,64 +63,61 @@ Realtime lifecycle states:
 - `disconnected`
 - `error`
 
-### Session + Reconnect Metadata
+## State Reducer and Ordering Guardrails
 
-- Session client: `apps/web/src/lib/session.ts`
-- Bootstrap reconnect: `apps/web/src/app/bootstrap.ts`
+Reducer implementation: `apps/web/src/state/reducer.ts`
 
-Persistence includes:
+Both HTTP `outbound` events and websocket events pass through one reducer path.
+
+Guardrails:
+
+- deterministic duplicate suppression via bounded `seenEventKeys`,
+- stale rejection using server ordering metadata (`ordering.sequence`) when present,
+- fallback stale checks by phase/hand/trick progression when ordering metadata is absent,
+- bounded notices/rejections history to avoid unbounded client growth.
+
+Ordering metadata source is server broker fanout (`ordering.sequence`, `ordering.emittedAtMs`) and is validated by contract suites.
+
+## Session and Reconnect Behavior
+
+Persisted session fields:
 
 - `lobbyId`, `playerId`, `sessionId`, `reconnectToken`, `displayName`,
-- `savedAtMs` timestamp with staleness guard.
+- `savedAtMs` (staleness guard).
 
-Default staleness window is 6 hours.
+Default client-side stale-session window: `6 hours`.
 
-## UI Surface
+Reconnect semantics:
 
-Main gameplay/lobby components:
-
-- `SeatGrid`
-- `StartControls`
-- `BiddingPanel`
-- `CardHand`
-- `TrickTable`
-- `Scoreboard`
-
-Theme and responsive behavior:
-
-- `apps/web/src/styles/theme.css`
-
-Accessibility hardening includes:
-
-- visible `:focus-visible` rings,
-- semantic labels/roles on key controls,
-- touch-friendly control sizing,
-- narrow/mobile breakpoint layout handling.
+- reconnect attempts use stored `sessionId` + `reconnectToken`.
+- server accepts reconnect only within configured reconnect grace window.
+- if reconnect grace expires, server lifecycle sweeper may force forfeit and complete the game.
 
 ## Multi-Client Smoke Workflow
 
-Prerequisite: server running (`pnpm --filter @fun-euchre/server dev`).
+1. Start server and web app.
+2. In browser A, create lobby.
+3. In browser B/C/D (separate profiles/incognito), join via invite link.
+4. Start game from host.
+5. Submit bidding and gameplay actions in turn order.
+6. Trigger one illegal action and confirm inline rejection feedback.
+7. Close browser B and verify disconnected seat state.
+8. Reopen browser B and verify reconnect and state convergence.
 
-1. Open app in browser A; create lobby.
-2. Open browsers B/C/D (separate profiles/incognito); join lobby via invite link.
-3. From host (A), start game.
-4. Submit bidding actions in seat turn order.
-5. Attempt one illegal action and verify inline rejection message.
-6. Close browser B; verify seat shows disconnected.
-7. Reopen browser B and reconnect via saved session token; verify seat reconnects.
+## Troubleshooting
 
-## Reconnect Troubleshooting
+- App does not auto-rejoin:
+  - saved session is stale and was cleared on hydrate.
+- Reconnect rejected as invalid/expired:
+  - reconnect grace window elapsed or token no longer valid.
+- Lobby/game projection appears stale:
+  - inspect network stream for out-of-order replay and confirm latest sequence is applied.
+- Websocket repeatedly fails to connect:
+  - verify latest `sessionId` + `reconnectToken` pair from create/join response.
 
-- App loads but does not auto-rejoin:
-  - saved session may be stale (expired `savedAtMs`) and gets cleared on hydrate.
-- Reconnect message says session invalid/expired:
-  - reconnect window elapsed or server no longer accepts token.
-- Lobby appears stale after reconnect:
-  - check for latest `lobby.state`/`game.state` events in network logs.
-- Websocket errors after join:
-  - verify `sessionId` and `reconnectToken` are the latest values from create/join response.
+Operational incident workflows live in `docs/operations/runbook.md`.
 
-## Test Commands
+## Validation Commands
 
 From repo root:
 
@@ -146,10 +127,11 @@ pnpm --filter @fun-euchre/web typecheck
 pnpm --filter @fun-euchre/web lint
 ```
 
-Key suites:
+High-signal suites:
 
+- `apps/web/test/contract-events.test.ts`
+- `apps/web/test/state-reducer.test.ts`
+- `apps/web/test/reconnect-ui.test.ts`
 - `apps/web/test/lobby-page.test.ts`
 - `apps/web/test/game-page.test.ts`
-- `apps/web/test/reconnect-ui.test.ts`
-- `apps/web/test/contract-events.test.ts`
 - `apps/web/test/accessibility-smoke.test.ts`

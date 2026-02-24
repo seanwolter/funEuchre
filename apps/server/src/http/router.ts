@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { URL } from "node:url";
+import type { OperationalMetrics } from "../observability/metrics.js";
 
 export type HttpMethod =
   | "GET"
@@ -30,6 +31,7 @@ export type RouteDefinition = {
 export type AppRouterOptions = {
   lobbyRoutes?: readonly RouteDefinition[];
   actionRoutes?: readonly RouteDefinition[];
+  metrics?: OperationalMetrics;
 };
 
 export type AppRequestHandler = (
@@ -97,9 +99,30 @@ function createHealthRoute(): RouteDefinition {
   };
 }
 
+function createMetricsRoute(metrics: OperationalMetrics): RouteDefinition {
+  return {
+    method: ["GET", "HEAD"],
+    path: "/metrics",
+    handler: ({ method, response }) => {
+      if (method === "HEAD") {
+        response.writeHead(200, JSON_HEADERS);
+        response.end();
+        return;
+      }
+
+      respondJson(response, 200, metrics.snapshot());
+    }
+  };
+}
+
 function buildRouteTable(options: AppRouterOptions): RouteDefinition[] {
+  const routes: RouteDefinition[] = [createHealthRoute()];
+  if (options.metrics) {
+    routes.push(createMetricsRoute(options.metrics));
+  }
+
   return [
-    createHealthRoute(),
+    ...routes,
     ...(options.lobbyRoutes ?? []),
     ...(options.actionRoutes ?? [])
   ];

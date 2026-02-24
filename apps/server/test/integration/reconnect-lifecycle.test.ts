@@ -3,7 +3,11 @@ import { once } from "node:events";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
-import type { LobbyStateEvent, ServerToClientEvent } from "@fun-euchre/protocol";
+import type {
+  ClientToServerEvent,
+  LobbyStateEvent,
+  ServerToClientEvent
+} from "@fun-euchre/protocol";
 import {
   createInitialGameState,
   createTeamScore,
@@ -37,6 +41,7 @@ import {
 } from "../../src/domain/ids.js";
 import { toLobbyStateEvent } from "../../src/domain/protocolAdapter.js";
 import { InMemorySocketServer } from "../../src/realtime/socketServer.js";
+import { createRuntimeOrchestrator } from "../../src/runtime/orchestrator.js";
 import { createAppServer } from "../../src/server.js";
 import type {
   GameId,
@@ -82,6 +87,13 @@ type SessionIdentityMetadata = {
   reconnectToken: string;
 };
 
+type RuntimeIdentity = {
+  lobbyId: LobbyId;
+  playerId: PlayerId;
+  sessionId: SessionId;
+  reconnectToken: ReconnectToken;
+};
+
 type StartedServer = {
   baseUrl: string;
   close: () => Promise<void>;
@@ -110,6 +122,40 @@ function requireResponseIdentity(payload: JsonObject): SessionIdentityMetadata {
     playerId: asString(identity.playerId, "identity.playerId"),
     sessionId: asString(identity.sessionId, "identity.sessionId"),
     reconnectToken: asString(identity.reconnectToken, "identity.reconnectToken")
+  };
+}
+
+function toClientEvent(
+  type: ClientToServerEvent["type"],
+  requestId: string,
+  payload: Record<string, unknown>
+): ClientToServerEvent {
+  return {
+    version: 1,
+    type,
+    requestId,
+    payload
+  } as ClientToServerEvent;
+}
+
+function requireRuntimeIdentity(result: {
+  ok: boolean;
+  identity?: SessionIdentityMetadata;
+  code?: string;
+  message?: string;
+}): RuntimeIdentity {
+  if (!result.ok) {
+    throw new Error(`${result.code ?? "UNKNOWN"}: ${result.message ?? "unknown error"}`);
+  }
+  if (!result.identity) {
+    throw new Error("Expected command identity metadata.");
+  }
+
+  return {
+    lobbyId: parseLobbyIdOrThrow(result.identity.lobbyId),
+    playerId: parsePlayerIdOrThrow(result.identity.playerId),
+    sessionId: parseSessionIdOrThrow(result.identity.sessionId),
+    reconnectToken: parseReconnectTokenOrThrow(result.identity.reconnectToken)
   };
 }
 
@@ -508,6 +554,124 @@ test("reconnect lifecycle triggers forfeit after timeout and broadcasts ordered 
   }
 
   assert.equal(disconnectedCollector.events.length, disconnectedEventCountBefore);
+});
+
+test("runtime lifecycle sweep preserves reconnect grace and allows reconnect reclaim before timeout", async () => {
+  const nowMs = { value: 2_000_000 };
+  const runtime = createRuntimeOrchestrator({
+    clock: () => nowMs.value
+  });
+
+  const created = await runtime.lobbyCommandDispatcher(
+    {
+      kind: "lobby.create",
+      requestId: "runtime-grace-create",
+      displayName: "Host"
+    },
+    toClientEvent("lobby.create", "runtime-grace-create", {
+      displayName: "Host"
+    })
+  );
+  const hostIdentity = requireRuntimeIdentity(created);
+
+  const eastIdentity = requireRuntimeIdentity(
+    await runtime.lobbyCommandDispatcher(
+      {
+        kind: "lobby.join",
+        requestId: "runtime-grace-join-east",
+        lobbyId: hostIdentity.lobbyId,
+        displayName: "East",
+        reconnectToken: null
+      },
+      toClientEvent("lobby.join", "runtime-grace-join-east", {
+        lobbyId: hostIdentity.lobbyId,
+        displayName: "East",
+        reconnectToken: null
+      })
+    )
+  );
+  for (const [slot, displayName] of [
+    ["south", "South"],
+    ["west", "West"]
+  ] as const) {
+    const joined = await runtime.lobbyCommandDispatcher(
+      {
+        kind: "lobby.join",
+        requestId: `runtime-grace-join-${slot}`,
+        lobbyId: hostIdentity.lobbyId,
+        displayName,
+        reconnectToken: null
+      },
+      toClientEvent("lobby.join", `runtime-grace-join-${slot}`, {
+        lobbyId: hostIdentity.lobbyId,
+        displayName,
+        reconnectToken: null
+      })
+    );
+    if (!joined.ok) {
+      throw new Error(`${joined.code}: ${joined.message}`);
+    }
+  }
+
+  const started = await runtime.lobbyCommandDispatcher(
+    {
+      kind: "lobby.start",
+      requestId: "runtime-grace-start",
+      lobbyId: hostIdentity.lobbyId,
+      actorPlayerId: hostIdentity.playerId
+    },
+    toClientEvent("lobby.start", "runtime-grace-start", {
+      lobbyId: hostIdentity.lobbyId,
+      actorPlayerId: hostIdentity.playerId
+    })
+  );
+  if (!started.ok) {
+    throw new Error(`${started.code}: ${started.message}`);
+  }
+  const gameRecord = runtime.gameStore.findByLobbyId(hostIdentity.lobbyId);
+  assert.ok(gameRecord);
+
+  const disconnectedSession = runtime.sessionStore.setConnection(eastIdentity.sessionId, false);
+  assert.ok(disconnectedSession);
+  const lobbyRecord = runtime.lobbyStore.getByLobbyId(hostIdentity.lobbyId);
+  assert.ok(lobbyRecord);
+  const disconnectedLobby = setLobbyPlayerConnection(lobbyRecord.state, {
+    playerId: eastIdentity.playerId,
+    connected: false
+  });
+  if (!disconnectedLobby.ok) {
+    throw new Error(`${disconnectedLobby.code}: ${disconnectedLobby.message}`);
+  }
+  runtime.lobbyStore.upsert({ state: disconnectedLobby.state });
+  runtime.socketServer.disconnectSession(eastIdentity.sessionId);
+
+  nowMs.value += MIN_RECONNECT_GRACE_MS - 1;
+  const sweep = await runtime.runLifecycleSweep();
+  assert.equal(sweep.forfeitAppliedCount, 0);
+
+  const stillActiveGame = runtime.gameStore.getByGameId(gameRecord.gameId);
+  assert.ok(stillActiveGame);
+  assert.notEqual(stillActiveGame.state.phase, "completed");
+
+  const reclaimed = await runtime.lobbyCommandDispatcher(
+    {
+      kind: "lobby.join",
+      requestId: "runtime-grace-reclaim-east",
+      lobbyId: hostIdentity.lobbyId,
+      displayName: "East Reconnect",
+      reconnectToken: eastIdentity.reconnectToken
+    },
+    toClientEvent("lobby.join", "runtime-grace-reclaim-east", {
+      lobbyId: hostIdentity.lobbyId,
+      displayName: "East Reconnect",
+      reconnectToken: eastIdentity.reconnectToken
+    })
+  );
+  const reclaimedIdentity = requireRuntimeIdentity(reclaimed);
+  assert.equal(reclaimedIdentity.sessionId, eastIdentity.sessionId);
+  assert.equal(reclaimedIdentity.playerId, eastIdentity.playerId);
+  assert.equal(reclaimedIdentity.lobbyId, eastIdentity.lobbyId);
+  assert.equal(reclaimedIdentity.reconnectToken, eastIdentity.reconnectToken);
 });
 
 test("HTTP lobby flows issue identity metadata and reconnect token reclaim preserves seat ownership", async (t) => {

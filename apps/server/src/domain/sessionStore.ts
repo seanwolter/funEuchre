@@ -5,6 +5,7 @@ import type {
   ReconnectToken,
   SessionId
 } from "./types.js";
+import type { RuntimeSessionStorePort } from "./runtimePorts.js";
 import { createNoopLogger, type StructuredLogger } from "../observability/logger.js";
 
 type Clock = () => number;
@@ -71,7 +72,7 @@ function cloneRecord(record: SessionStoreRecord): SessionStoreRecord {
   };
 }
 
-export class InMemorySessionStore {
+export class InMemorySessionStore implements RuntimeSessionStorePort {
   private readonly clock: Clock;
   private readonly reconnectWindowMs: number;
   private readonly ttlMs: number | null;
@@ -213,6 +214,23 @@ export class InMemorySessionStore {
     this.sessionByPlayerId.delete(record.playerId);
     this.sessionByReconnectToken.delete(record.reconnectToken);
     return true;
+  }
+
+  listRecords(): SessionStoreRecord[] {
+    return [...this.bySessionId.values()].map((record) => cloneRecord(record));
+  }
+
+  replaceAll(records: readonly SessionStoreRecord[]): void {
+    this.bySessionId.clear();
+    this.sessionByPlayerId.clear();
+    this.sessionByReconnectToken.clear();
+
+    for (const record of records) {
+      const cloned = cloneRecord(record);
+      this.bySessionId.set(cloned.sessionId, cloned);
+      this.sessionByPlayerId.set(cloned.playerId, cloned.sessionId);
+      this.sessionByReconnectToken.set(cloned.reconnectToken, cloned.sessionId);
+    }
   }
 
   isReconnectExpired(

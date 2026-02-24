@@ -16,6 +16,7 @@ import {
   writeJsonResponse
 } from "./json.js";
 import { createNoopLogger, type StructuredLogger } from "../observability/logger.js";
+import type { OperationalMetrics } from "../observability/metrics.js";
 
 export type GameCommandDispatchSuccess = {
   ok: true;
@@ -42,6 +43,7 @@ export type GameCommandDispatcher = (
 export type GameRoutesOptions = {
   dispatchCommand?: GameCommandDispatcher;
   logger?: StructuredLogger;
+  metrics?: OperationalMetrics;
 };
 
 const DEFAULT_GAME_DISPATCHER: GameCommandDispatcher = () => ({
@@ -72,17 +74,38 @@ function correlationFromCommand(command: DomainCommand): {
   }
 }
 
+function elapsedSince(startedAtMs: number): number {
+  return Math.max(0, Date.now() - startedAtMs);
+}
+
 export function createGameRoutes(options: GameRoutesOptions = {}): RouteDefinition[] {
   const dispatchCommand = options.dispatchCommand ?? DEFAULT_GAME_DISPATCHER;
   const logger = options.logger ?? createNoopLogger();
+  const metrics = options.metrics;
 
   return [
     {
       method: "POST",
       path: "/actions",
       handler: async ({ request, response }) => {
+        const startedAtMs = Date.now();
+        let commandKind = "actions.unknown";
+        const recordCommand = (
+          outcome: "accepted" | "rejected",
+          rejectCode?: RejectCode | null
+        ): void => {
+          metrics?.recordCommand({
+            scope: "actions",
+            kind: commandKind,
+            outcome,
+            latencyMs: elapsedSince(startedAtMs),
+            rejectCode: rejectCode ?? null
+          });
+        };
+
         const bodyResult = await readJsonBody(request);
         if (!bodyResult.ok) {
+          recordCommand("rejected", "INVALID_ACTION");
           logger.logReject({
             code: "INVALID_ACTION",
             message: bodyResult.message,
@@ -100,6 +123,9 @@ export function createGameRoutes(options: GameRoutesOptions = {}): RouteDefiniti
           return;
         }
 
+        if (typeof bodyResult.data.type === "string") {
+          commandKind = bodyResult.data.type;
+        }
         const requestId = resolveRequestId(request, bodyResult.data);
         const candidate: unknown = {
           version:
@@ -112,6 +138,7 @@ export function createGameRoutes(options: GameRoutesOptions = {}): RouteDefiniti
         };
         const validated = validateClientToServerEvent(candidate);
         if (!validated.ok) {
+          recordCommand("rejected", "INVALID_ACTION");
           logger.logReject({
             code: "INVALID_ACTION",
             message: validated.issues.join(" "),
@@ -131,8 +158,10 @@ export function createGameRoutes(options: GameRoutesOptions = {}): RouteDefiniti
           return;
         }
 
+        commandKind = validated.data.type;
         const mapped = toDomainCommand(validated.data);
         if (!mapped.ok) {
+          recordCommand("rejected", mapped.reject.code);
           logger.logReject({
             code: mapped.reject.code,
             message: mapped.reject.message,
@@ -153,6 +182,7 @@ export function createGameRoutes(options: GameRoutesOptions = {}): RouteDefiniti
         const correlation = correlationFromCommand(mapped.data);
         const dispatched = await dispatchCommand(mapped.data, validated.data);
         if (!dispatched.ok) {
+          recordCommand("rejected", dispatched.code);
           logger.logReject({
             code: dispatched.code,
             message: dispatched.message,
@@ -174,6 +204,8 @@ export function createGameRoutes(options: GameRoutesOptions = {}): RouteDefiniti
           return;
         }
 
+        recordCommand("accepted");
+        metrics?.observeOutbound(dispatched.outbound);
         logger.logGameTransition({
           transition: mapped.data.kind,
           message: "Game command accepted.",

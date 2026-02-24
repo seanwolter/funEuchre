@@ -71,6 +71,19 @@ function requireSeat(event: LobbyStateEvent, seat: Seat): LobbyStateEvent["paylo
   return found;
 }
 
+function requireOrderingSequence(event: ServerToClientEvent): number {
+  const ordering = event.ordering;
+  if (!ordering || !Number.isInteger(ordering.sequence) || ordering.sequence <= 0) {
+    throw new Error("Expected positive integer event ordering.sequence.");
+  }
+  return ordering.sequence;
+}
+
+function withoutOrdering(event: ServerToClientEvent): Omit<ServerToClientEvent, "ordering"> {
+  const { ordering: _ordering, ...rest } = event;
+  return rest;
+}
+
 async function publishLobbyState(socketServer: InMemorySocketServer, state: LobbyState): Promise<void> {
   const result = await socketServer.broadcastLobbyEvents(state.lobbyId, [toLobbyStateEvent(state)]);
   if (!result.ok) {
@@ -170,7 +183,8 @@ test("lobby lifecycle create/join/start preserves ordered lobby.state parity acr
 
   const expectedTail = requireLastTwo(lobbyStateEvents(hostCollector.events));
   const expectedFinalEvent = toLobbyStateEvent(lobby);
-  assert.deepEqual(expectedTail[1], expectedFinalEvent);
+  assert.deepEqual(withoutOrdering(expectedTail[1]), expectedFinalEvent);
+  assert.equal(requireOrderingSequence(expectedTail[1]) > requireOrderingSequence(expectedTail[0]), true);
   assert.equal(requireSeat(expectedTail[0], "east").displayName, "East Renamed");
 
   for (const collector of collectors) {

@@ -3,6 +3,17 @@ import { once } from "node:events";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
+import { InMemoryGameStore } from "../../src/domain/gameStore.js";
+import { InMemoryLobbyStore } from "../../src/domain/lobbyStore.js";
+import type {
+  RuntimeGameStorePort,
+  RuntimeLobbyStorePort,
+  RuntimeRealtimeFanoutPort,
+  RuntimeSessionStorePort
+} from "../../src/domain/runtimePorts.js";
+import { InMemorySessionStore } from "../../src/domain/sessionStore.js";
+import { InMemorySocketServer } from "../../src/realtime/socketServer.js";
+import { createRuntimeOrchestrator } from "../../src/runtime/orchestrator.js";
 import { createAppServer } from "../../src/server.js";
 
 type JsonObject = Record<string, unknown>;
@@ -74,6 +85,64 @@ async function postJson(
   return {
     status: response.status,
     body
+  };
+}
+
+function asLobbyStorePort(store: InMemoryLobbyStore): RuntimeLobbyStorePort {
+  return {
+    upsert: store.upsert.bind(store),
+    getByLobbyId: store.getByLobbyId.bind(store),
+    findByPlayerId: store.findByPlayerId.bind(store),
+    deleteByLobbyId: store.deleteByLobbyId.bind(store),
+    listRecords: store.listRecords.bind(store),
+    replaceAll: store.replaceAll.bind(store),
+    isExpired: store.isExpired.bind(store),
+    pruneExpired: store.pruneExpired.bind(store)
+  };
+}
+
+function asGameStorePort(store: InMemoryGameStore): RuntimeGameStorePort {
+  return {
+    upsert: store.upsert.bind(store),
+    getByGameId: store.getByGameId.bind(store),
+    findByLobbyId: store.findByLobbyId.bind(store),
+    deleteByGameId: store.deleteByGameId.bind(store),
+    listRecords: store.listRecords.bind(store),
+    replaceAll: store.replaceAll.bind(store),
+    isExpired: store.isExpired.bind(store),
+    pruneExpired: store.pruneExpired.bind(store)
+  };
+}
+
+function asSessionStorePort(store: InMemorySessionStore): RuntimeSessionStorePort {
+  return {
+    upsert: store.upsert.bind(store),
+    getBySessionId: store.getBySessionId.bind(store),
+    findByPlayerId: store.findByPlayerId.bind(store),
+    findByReconnectToken: store.findByReconnectToken.bind(store),
+    setConnection: store.setConnection.bind(store),
+    touch: store.touch.bind(store),
+    deleteBySessionId: store.deleteBySessionId.bind(store),
+    listRecords: store.listRecords.bind(store),
+    replaceAll: store.replaceAll.bind(store),
+    isReconnectExpired: store.isReconnectExpired.bind(store),
+    isExpired: store.isExpired.bind(store),
+    pruneExpired: store.pruneExpired.bind(store)
+  };
+}
+
+function asRealtimeFanoutPort(server: InMemorySocketServer): RuntimeRealtimeFanoutPort {
+  return {
+    connectSession: server.connectSession.bind(server),
+    hasSession: server.hasSession.bind(server),
+    disconnectSession: server.disconnectSession.bind(server),
+    bindSessionToLobby: server.bindSessionToLobby.bind(server),
+    unbindSessionFromLobby: server.unbindSessionFromLobby.bind(server),
+    bindSessionToGame: server.bindSessionToGame.bind(server),
+    unbindSessionFromGame: server.unbindSessionFromGame.bind(server),
+    listSessionRooms: server.listSessionRooms.bind(server),
+    broadcastLobbyEvents: server.broadcastLobbyEvents.bind(server),
+    broadcastGameEvents: server.broadcastGameEvents.bind(server)
   };
 }
 
@@ -160,4 +229,29 @@ test("default app server wires real runtime command dispatchers for lobby and ac
       false
     );
   }
+});
+
+test("default runtime orchestration accepts port-compatible adapter objects", async (t) => {
+  const runtime = createRuntimeOrchestrator({
+    lobbyStore: asLobbyStorePort(new InMemoryLobbyStore()),
+    gameStore: asGameStorePort(new InMemoryGameStore()),
+    sessionStore: asSessionStorePort(new InMemorySessionStore()),
+    socketServer: asRealtimeFanoutPort(new InMemorySocketServer())
+  });
+  const server = createAppServer({ runtime });
+  const started = await startServer(server);
+  t.after(async () => {
+    await started.close();
+  });
+
+  const created = await postJson(started.baseUrl, "/lobbies/create", {
+    requestId: "req-port-create",
+    displayName: "Host"
+  });
+  assert.equal(created.status, 200);
+  assert.equal(created.body.error, undefined);
+
+  const outbound = requireOutbound(created.body);
+  assert.equal(outbound.length >= 1, true);
+  assert.equal(outbound[0]?.type, "lobby.state");
 });

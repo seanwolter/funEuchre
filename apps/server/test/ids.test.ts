@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createIncrementalIdFactory,
+  createSecureIdFactory,
   isGameId,
   isLobbyId,
   isPlayerId,
@@ -26,6 +27,10 @@ test("identifier parsers accept canonical values and reject malformed input", ()
   assert.equal(parsePlayerId("Player-3"), "Player-3");
   assert.equal(parseSessionId("session-1"), "session-1");
   assert.equal(parseReconnectToken("reconnect-token"), "reconnect-token");
+  assert.equal(
+    parseReconnectToken("rt1.eyJ2IjoxfQ.ZXhhbXBsZQ"),
+    "rt1.eyJ2IjoxfQ.ZXhhbXBsZQ"
+  );
 
   for (const value of ["", " ", "abc def", "abc.def", "@id", "id!"] as const) {
     assert.equal(parseLobbyId(value), null);
@@ -55,6 +60,25 @@ test("incremental id factory is deterministic and monotonic", () => {
   assert.equal(factory.nextPlayerId(), "test-player-12");
   assert.equal(factory.nextSessionId(), "test-session-13");
   assert.equal(factory.nextReconnectToken(), "test-reconnect-14");
+});
+
+test("secure id factory emits parseable non-empty opaque ids", () => {
+  const factory = createSecureIdFactory({
+    prefix: "secure",
+    randomBytesFactory: () => Buffer.from("0123456789ab", "utf8")
+  });
+
+  const lobbyId = factory.nextLobbyId();
+  const gameId = factory.nextGameId();
+  const playerId = factory.nextPlayerId();
+  const sessionId = factory.nextSessionId();
+  const reconnectToken = factory.nextReconnectToken();
+
+  assert.equal(isLobbyId(lobbyId), true);
+  assert.equal(isGameId(gameId), true);
+  assert.equal(isPlayerId(playerId), true);
+  assert.equal(isSessionId(sessionId), true);
+  assert.equal(isReconnectToken(reconnectToken), true);
 });
 
 test("domain id factory can be stubbed in tests", () => {

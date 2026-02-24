@@ -1,7 +1,6 @@
 import type { RejectCode, ServerToClientEvent } from "@fun-euchre/protocol";
 import { applyGameAction, createInitialGameState } from "@fun-euchre/game-rules";
 import { GameManager } from "../domain/gameManager.js";
-import type { InMemoryGameStore } from "../domain/gameStore.js";
 import { parseGameId } from "../domain/ids.js";
 import {
   createLobbyState,
@@ -10,12 +9,19 @@ import {
   startLobbyGame,
   updateLobbyDisplayName
 } from "../domain/lobby.js";
-import type { InMemoryLobbyStore } from "../domain/lobbyStore.js";
 import { toGameStateEvent, toLobbyStateEvent } from "../domain/protocolAdapter.js";
-import type { ReconnectPolicy } from "../domain/reconnectPolicy.js";
 import {
-  toSessionIdentity,
-  type InMemorySessionStore
+  resolveReconnectForfeit,
+  type ReconnectPolicy
+} from "../domain/reconnectPolicy.js";
+import type {
+  RuntimeGameStorePort,
+  RuntimeLobbyStorePort,
+  RuntimeRealtimeFanoutPort,
+  RuntimeSessionStorePort
+} from "../domain/runtimePorts.js";
+import {
+  toSessionIdentity
 } from "../domain/sessionStore.js";
 import type {
   DomainIdFactory,
@@ -32,22 +38,40 @@ import type {
   CommandDispatchFailure,
   LobbyCommandDispatcher
 } from "../http/lobbyRoutes.js";
-import { InMemorySocketServer } from "../realtime/socketServer.js";
+import {
+  createNoopLogger,
+  type StructuredLogger
+} from "../observability/logger.js";
+import type { ReconnectTokenManager } from "../security/reconnectToken.js";
 
 type RuntimeDispatcherDependencies = {
   idFactory: DomainIdFactory;
-  lobbyStore: InMemoryLobbyStore;
-  gameStore: InMemoryGameStore;
-  sessionStore: InMemorySessionStore;
+  lobbyStore: RuntimeLobbyStorePort;
+  gameStore: RuntimeGameStorePort;
+  sessionStore: RuntimeSessionStorePort;
   reconnectPolicy: ReconnectPolicy;
-  socketServer: InMemorySocketServer;
+  socketServer: RuntimeRealtimeFanoutPort;
   gameManager: GameManager;
+  reconnectTokenManager: ReconnectTokenManager;
+  logger?: StructuredLogger;
+  requestCheckpoint?: () => void;
   now?: () => number;
+};
+
+export type ReconnectLifecycleSweepResult = {
+  nowMs: number;
+  evaluatedSessionCount: number;
+  forfeitAppliedCount: number;
+  sessionPrunedCount: number;
+  gamePrunedCount: number;
+  lobbyPrunedCount: number;
+  checkpointRequested: boolean;
 };
 
 export type RuntimeDispatchers = {
   lobbyCommandDispatcher: LobbyCommandDispatcher;
   gameCommandDispatcher: GameCommandDispatcher;
+  runLifecycleSweep: () => Promise<ReconnectLifecycleSweepResult>;
 };
 
 const NOOP_EVENT_SINK = (): void => {};
@@ -72,7 +96,7 @@ function gameCommandFailure(
 }
 
 function bindSession(
-  socketServer: InMemorySocketServer,
+  socketServer: RuntimeRealtimeFanoutPort,
   sessionId: SessionId,
   lobbyId: LobbyId,
   gameId: GameId | null
@@ -174,10 +198,27 @@ async function publishGameOutbound(
   await dependencies.socketServer.broadcastGameEvents(gameId, outbound);
 }
 
+function createSweepResult(nowMs: number): ReconnectLifecycleSweepResult {
+  return {
+    nowMs,
+    evaluatedSessionCount: 0,
+    forfeitAppliedCount: 0,
+    sessionPrunedCount: 0,
+    gamePrunedCount: 0,
+    lobbyPrunedCount: 0,
+    checkpointRequested: false
+  };
+}
+
+function isAfterDeadline(deadlineMs: number, nowMs: number): boolean {
+  return nowMs > deadlineMs;
+}
+
 export function createRuntimeDispatchers(
   dependencies: RuntimeDispatcherDependencies
 ): RuntimeDispatchers {
   const now = dependencies.now ?? (() => Date.now());
+  const logger = dependencies.logger ?? createNoopLogger();
 
   const lobbyCommandDispatcher: LobbyCommandDispatcher = async (command) => {
     switch (command.kind) {
@@ -185,7 +226,11 @@ export function createRuntimeDispatchers(
         const lobbyId = dependencies.idFactory.nextLobbyId();
         const hostPlayerId = dependencies.idFactory.nextPlayerId();
         const sessionId = dependencies.idFactory.nextSessionId();
-        const reconnectToken = dependencies.idFactory.nextReconnectToken();
+        const reconnectToken = dependencies.reconnectTokenManager.issue({
+          sessionId,
+          lobbyId,
+          playerId: hostPlayerId
+        });
 
         const lobbyState = createLobbyState({
           lobbyId,
@@ -201,6 +246,7 @@ export function createRuntimeDispatchers(
           reconnectToken
         });
         bindSession(dependencies.socketServer, sessionId, lobbyId, null);
+        dependencies.requestCheckpoint?.();
         const outbound = [toLobbyStateEvent(lobbyState)];
         await publishLobbyOutbound(dependencies, lobbyId, outbound);
 
@@ -221,10 +267,31 @@ export function createRuntimeDispatchers(
         }
 
         if (command.reconnectToken !== null) {
-          const reconnectSession = dependencies.sessionStore.findByReconnectToken(
-            command.reconnectToken
+          const verifiedReconnectToken = dependencies.reconnectTokenManager.verify(
+            command.reconnectToken,
+            {
+              expectedLobbyId: command.lobbyId
+            }
           );
-          if (!reconnectSession) {
+          if (!verifiedReconnectToken.ok) {
+            return commandFailure(
+              "UNAUTHORIZED",
+              "Reconnect token is invalid or expired."
+            );
+          }
+          const reconnectSession = dependencies.sessionStore.getBySessionId(
+            verifiedReconnectToken.claims.sessionId
+          );
+          if (!reconnectSession || reconnectSession.reconnectToken !== command.reconnectToken) {
+            return commandFailure(
+              "UNAUTHORIZED",
+              "Reconnect token is invalid or expired."
+            );
+          }
+          if (
+            reconnectSession.playerId !== verifiedReconnectToken.claims.playerId ||
+            reconnectSession.lobbyId !== verifiedReconnectToken.claims.lobbyId
+          ) {
             return commandFailure(
               "UNAUTHORIZED",
               "Reconnect token is invalid or expired."
@@ -272,6 +339,7 @@ export function createRuntimeDispatchers(
             command.lobbyId,
             nextSession.gameId
           );
+          dependencies.requestCheckpoint?.();
           const outbound = collectLobbyOutbound(
             dependencies,
             command.lobbyId,
@@ -288,7 +356,11 @@ export function createRuntimeDispatchers(
 
         const playerId = dependencies.idFactory.nextPlayerId();
         const sessionId = dependencies.idFactory.nextSessionId();
-        const reconnectToken = dependencies.idFactory.nextReconnectToken();
+        const reconnectToken = dependencies.reconnectTokenManager.issue({
+          sessionId,
+          lobbyId: command.lobbyId,
+          playerId
+        });
         const joinedLobby = joinLobby(lobbyRecord.state, {
           playerId,
           displayName: command.displayName
@@ -312,6 +384,7 @@ export function createRuntimeDispatchers(
           command.lobbyId,
           nextSession.gameId
         );
+        dependencies.requestCheckpoint?.();
         const outbound = collectLobbyOutbound(
           dependencies,
           command.lobbyId,
@@ -344,6 +417,7 @@ export function createRuntimeDispatchers(
         }
 
         dependencies.lobbyStore.upsert({ state: updatedLobby.state });
+        dependencies.requestCheckpoint?.();
         const outbound = [toLobbyStateEvent(updatedLobby.state)];
         await publishLobbyOutbound(dependencies, command.lobbyId, outbound);
         return {
@@ -387,6 +461,7 @@ export function createRuntimeDispatchers(
           state: dealtState.state
         });
         upsertSessionGameBindings(dependencies, command.lobbyId, nextGameId);
+        dependencies.requestCheckpoint?.();
         const outbound = [
           toLobbyStateEvent(startedLobby.state),
           toGameStateEvent(nextGameId, dealtState.state)
@@ -415,6 +490,9 @@ export function createRuntimeDispatchers(
     }
 
     const submitted = await dependencies.gameManager.submitEvent(command.gameId, event);
+    if (submitted.persisted) {
+      dependencies.requestCheckpoint?.();
+    }
     await publishGameOutbound(dependencies, command.gameId, submitted.outbound);
     return {
       ok: true,
@@ -422,8 +500,139 @@ export function createRuntimeDispatchers(
     } satisfies GameCommandDispatchResult;
   };
 
+  const runLifecycleSweep = async (): Promise<ReconnectLifecycleSweepResult> => {
+    const nowMs = now();
+    const result = createSweepResult(nowMs);
+    const requestId = `runtime-sweep-${nowMs}`;
+
+    const sessionRecords = dependencies.sessionStore.listRecords();
+    result.evaluatedSessionCount = sessionRecords.length;
+
+    for (const sessionRecord of sessionRecords) {
+      if (sessionRecord.connected) {
+        continue;
+      }
+      if (!dependencies.reconnectPolicy.shouldForfeit(sessionRecord, nowMs)) {
+        continue;
+      }
+
+      const lobbyRecord = dependencies.lobbyStore.getByLobbyId(sessionRecord.lobbyId);
+      if (!lobbyRecord) {
+        continue;
+      }
+
+      const gameRecord =
+        sessionRecord.gameId === null
+          ? dependencies.gameStore.findByLobbyId(sessionRecord.lobbyId)
+          : dependencies.gameStore.getByGameId(sessionRecord.gameId) ??
+            dependencies.gameStore.findByLobbyId(sessionRecord.lobbyId);
+      if (!gameRecord || gameRecord.state.phase === "completed") {
+        continue;
+      }
+
+      const forfeitResult = resolveReconnectForfeit({
+        gameId: gameRecord.gameId,
+        state: gameRecord.state,
+        lobbyState: lobbyRecord.state,
+        forfeitingPlayerId: sessionRecord.playerId,
+        requestId,
+        logger
+      });
+      if (!forfeitResult.ok) {
+        continue;
+      }
+
+      dependencies.gameStore.upsert({
+        gameId: gameRecord.gameId,
+        lobbyId: gameRecord.lobbyId,
+        state: forfeitResult.state
+      });
+      await publishGameOutbound(dependencies, gameRecord.gameId, forfeitResult.outbound);
+      result.forfeitAppliedCount += 1;
+      result.checkpointRequested = true;
+    }
+
+    const retainedLobbyIds = new Set<LobbyId>();
+    const retainedGameIds = new Set<GameId>();
+    for (const sessionRecord of dependencies.sessionStore.listRecords()) {
+      const retentionExpired =
+        !sessionRecord.connected &&
+        dependencies.reconnectPolicy.isRetentionExpired(sessionRecord, nowMs);
+      const ttlExpired =
+        sessionRecord.connected && dependencies.sessionStore.isExpired(sessionRecord, nowMs);
+      if (retentionExpired || ttlExpired) {
+        if (dependencies.sessionStore.deleteBySessionId(sessionRecord.sessionId)) {
+          dependencies.socketServer.disconnectSession(sessionRecord.sessionId);
+          result.sessionPrunedCount += 1;
+          result.checkpointRequested = true;
+        }
+        continue;
+      }
+
+      retainedLobbyIds.add(sessionRecord.lobbyId);
+      if (sessionRecord.gameId !== null) {
+        retainedGameIds.add(sessionRecord.gameId);
+      }
+    }
+
+    for (const gameRecord of dependencies.gameStore.listRecords()) {
+      if (retainedGameIds.has(gameRecord.gameId)) {
+        continue;
+      }
+
+      const retentionExpired = isAfterDeadline(
+        dependencies.reconnectPolicy.retentionDeadlineFromActivity(gameRecord.updatedAtMs),
+        nowMs
+      );
+      const ttlExpired = dependencies.gameStore.isExpired(gameRecord, nowMs);
+      if (!retentionExpired && !ttlExpired) {
+        continue;
+      }
+
+      if (dependencies.gameStore.deleteByGameId(gameRecord.gameId)) {
+        result.gamePrunedCount += 1;
+        result.checkpointRequested = true;
+      }
+    }
+
+    const activeGameLobbyIds = new Set<LobbyId>();
+    for (const gameRecord of dependencies.gameStore.listRecords()) {
+      activeGameLobbyIds.add(gameRecord.lobbyId);
+    }
+
+    for (const lobbyRecord of dependencies.lobbyStore.listRecords()) {
+      if (retainedLobbyIds.has(lobbyRecord.lobbyId)) {
+        continue;
+      }
+      if (activeGameLobbyIds.has(lobbyRecord.lobbyId)) {
+        continue;
+      }
+
+      const retentionExpired = isAfterDeadline(
+        dependencies.reconnectPolicy.retentionDeadlineFromActivity(lobbyRecord.updatedAtMs),
+        nowMs
+      );
+      const ttlExpired = dependencies.lobbyStore.isExpired(lobbyRecord, nowMs);
+      if (!retentionExpired && !ttlExpired) {
+        continue;
+      }
+
+      if (dependencies.lobbyStore.deleteByLobbyId(lobbyRecord.lobbyId)) {
+        result.lobbyPrunedCount += 1;
+        result.checkpointRequested = true;
+      }
+    }
+
+    if (result.checkpointRequested) {
+      dependencies.requestCheckpoint?.();
+    }
+
+    return result;
+  };
+
   return {
     lobbyCommandDispatcher,
-    gameCommandDispatcher
+    gameCommandDispatcher,
+    runLifecycleSweep
   };
 }

@@ -263,6 +263,20 @@ function parseGameLegalActions(input) {
         callableTrumpSuits
     };
 }
+function parseServerEventOrdering(input) {
+    if (!isRecord(input)) {
+        return null;
+    }
+    const sequence = asNonNegativeInteger(input.sequence);
+    const emittedAtMs = asNonNegativeInteger(input.emittedAtMs);
+    if (sequence === null || sequence <= 0 || emittedAtMs === null) {
+        return null;
+    }
+    return {
+        sequence,
+        emittedAtMs
+    };
+}
 function parseClientBase(input) {
     if (!isRecord(input)) {
         return fail("Client event must be an object.");
@@ -297,11 +311,15 @@ function parseServerBase(input) {
     if (typeof type !== "string") {
         return fail("Server event type must be a string.");
     }
+    const ordering = parseServerEventOrdering(input.ordering);
+    if (ordering === null) {
+        return fail("Server event ordering must include positive integer sequence and non-negative emittedAtMs.");
+    }
     const payload = input.payload;
     if (!isRecord(payload)) {
         return fail("Server event payload must be an object.");
     }
-    return ok({ type, payload });
+    return ok({ type, ordering, payload });
 }
 export function validateClientToServerEvent(input) {
     const base = parseClientBase(input);
@@ -455,7 +473,7 @@ export function validateServerToClientEvent(input) {
     if (!base.ok) {
         return base;
     }
-    const { type, payload } = base.data;
+    const { type, ordering, payload } = base.data;
     switch (type) {
         case "lobby.state": {
             const lobbyId = asNonEmptyString(payload.lobbyId);
@@ -471,6 +489,7 @@ export function validateServerToClientEvent(input) {
             return ok({
                 version: PROTOCOL_VERSION,
                 type,
+                ordering,
                 payload: { lobbyId, hostPlayerId, phase, seats }
             });
         }
@@ -580,6 +599,7 @@ export function validateServerToClientEvent(input) {
             return ok({
                 version: PROTOCOL_VERSION,
                 type,
+                ordering,
                 payload: statePayload
             });
         }
@@ -599,6 +619,7 @@ export function validateServerToClientEvent(input) {
             return ok({
                 version: PROTOCOL_VERSION,
                 type,
+                ordering,
                 payload: {
                     gameId,
                     seat,
@@ -618,6 +639,7 @@ export function validateServerToClientEvent(input) {
             return ok({
                 version: PROTOCOL_VERSION,
                 type,
+                ordering,
                 payload: { code, message, requestId }
             });
         }
@@ -630,6 +652,7 @@ export function validateServerToClientEvent(input) {
             return ok({
                 version: PROTOCOL_VERSION,
                 type,
+                ordering,
                 payload: { severity, message }
             });
         }

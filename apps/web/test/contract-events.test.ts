@@ -4,7 +4,7 @@ import type { ServerToClientEvent } from "@fun-euchre/protocol";
 import { createGameStore } from "../src/state/gameStore.js";
 import { toClientStateSnapshot } from "../src/state/reducer.js";
 
-const goldenContractSequence: readonly ServerToClientEvent[] = [
+const goldenContractSequenceRaw: readonly ServerToClientEvent[] = [
   {
     version: 1,
     type: "lobby.state",
@@ -325,11 +325,23 @@ const goldenContractSequence: readonly ServerToClientEvent[] = [
   }
 ];
 
+const GOLDEN_SEQUENCE_BY_EVENT = [1, 2, 3, 1, 2, 3, 4, 5, 2] as const;
+
+const goldenContractSequence: readonly ServerToClientEvent[] =
+  goldenContractSequenceRaw.map((event, index) => ({
+    ...event,
+    ordering: {
+      sequence: GOLDEN_SEQUENCE_BY_EVENT[index] ?? 1,
+      emittedAtMs: 1_700_000_000_000 + index
+    }
+  }));
+
 test("golden contract sequence yields identical state via HTTP envelope and websocket replay", () => {
   const httpStore = createGameStore();
   const httpResult = httpStore.dispatchEvents("http", goldenContractSequence);
   assert.equal(httpResult.appliedCount, goldenContractSequence.length - 1);
-  assert.equal(httpResult.ignoredDuplicateCount, 1);
+  assert.equal(httpResult.ignoredDuplicateCount, 0);
+  assert.equal(httpResult.ignoredStaleCount, 1);
 
   const realtimeStore = createGameStore();
   let realtimeAppliedCount = 0;
@@ -343,7 +355,7 @@ test("golden contract sequence yields identical state via HTTP envelope and webs
   }
   assert.equal(realtimeAppliedCount, httpResult.appliedCount);
   assert.equal(realtimeDuplicateCount, httpResult.ignoredDuplicateCount);
-  assert.equal(realtimeStaleCount, 0);
+  assert.equal(realtimeStaleCount, httpResult.ignoredStaleCount);
 
   assert.deepEqual(
     toClientStateSnapshot(realtimeStore.getState()),
@@ -371,4 +383,62 @@ test("reconnect replay events are treated as deterministic duplicates after HTTP
   assert.equal(replay.appliedCount, 0);
   assert.equal(replay.ignoredDuplicateCount, reconnectOutbound.length);
   assert.equal(replay.ignoredStaleCount, 0);
+});
+
+test("sequence ordering rejects out-of-order replay even when payload looks newer", () => {
+  const store = createGameStore();
+  const fresh: ServerToClientEvent = {
+    version: 1,
+    type: "game.state",
+    ordering: {
+      sequence: 10,
+      emittedAtMs: 1_700_000_100_010
+    },
+    payload: {
+      gameId: "contract-game-2",
+      handNumber: 2,
+      trickNumber: 3,
+      dealer: "south",
+      turn: "west",
+      trump: "hearts",
+      phase: "play",
+      scores: {
+        teamA: 1,
+        teamB: 0
+      }
+    }
+  };
+  const staleOutOfOrder: ServerToClientEvent = {
+    version: 1,
+    type: "game.state",
+    ordering: {
+      sequence: 9,
+      emittedAtMs: 1_700_000_100_009
+    },
+    payload: {
+      gameId: "contract-game-2",
+      handNumber: 99,
+      trickNumber: 99,
+      dealer: "east",
+      turn: "north",
+      trump: "spades",
+      phase: "completed",
+      scores: {
+        teamA: 10,
+        teamB: 0
+      }
+    }
+  };
+
+  const first = store.dispatchEvents("realtime", [fresh]);
+  assert.equal(first.appliedCount, 1);
+  const second = store.dispatchEvents("realtime", [staleOutOfOrder]);
+  assert.equal(second.appliedCount, 0);
+  assert.equal(second.ignoredDuplicateCount, 0);
+  assert.equal(second.ignoredStaleCount, 1);
+
+  const state = store.getState();
+  assert.equal(state.game?.handNumber, 2);
+  assert.equal(state.game?.trickNumber, 3);
+  assert.equal(state.game?.phase, "play");
 });
