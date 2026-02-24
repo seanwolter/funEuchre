@@ -209,6 +209,14 @@ export function mountGamePage(options: GamePageMountOptions): () => void {
       store: options.store,
       baseUrl: options.win.location.href,
       onLifecycle: (event) => {
+        if (event.status === "connected" || event.status === "subscribed") {
+          if (localStatus && localStatus.tone !== "error") {
+            localStatus = null;
+            renderPanels();
+          }
+          return;
+        }
+
         if (
           event.status === "connecting" ||
           event.status === "error" ||

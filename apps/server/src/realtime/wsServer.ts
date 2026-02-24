@@ -3,9 +3,14 @@ import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { parseGameId, parseReconnectToken, parseSessionId } from "../domain/ids.js";
 import { setLobbyPlayerConnection } from "../domain/lobby.js";
-import { toLobbyStateEvent } from "../domain/protocolAdapter.js";
+import {
+  toGamePrivateStateEvent,
+  toGameStateEvent,
+  toLobbyStateEvent
+} from "../domain/protocolAdapter.js";
 import type { ReconnectPolicy } from "../domain/reconnectPolicy.js";
 import type {
+  RuntimeGameStorePort,
   RuntimeLobbyStorePort,
   RuntimeRealtimeFanoutPort,
   RuntimeSessionStorePort
@@ -20,6 +25,7 @@ const DEFAULT_WS_PATH = "/realtime/ws";
 
 type WsRuntimeDependencies = {
   lobbyStore: RuntimeLobbyStorePort;
+  gameStore: RuntimeGameStorePort;
   sessionStore: RuntimeSessionStorePort;
   reconnectPolicy: ReconnectPolicy;
   reconnectTokenManager: ReconnectTokenManager;
@@ -250,6 +256,40 @@ async function applySessionConnectionState(
   await dependencies.socketServer.broadcastLobbyEvents(session.lobbyId, [
     toLobbyStateEvent(updatedLobby.state)
   ]);
+}
+
+function sendSubscribeCatchup(
+  dependencies: WsRuntimeDependencies,
+  socket: Duplex,
+  sessionId: SessionId
+): void {
+  const session = dependencies.sessionStore.getBySessionId(sessionId);
+  if (!session) {
+    return;
+  }
+
+  const lobby = dependencies.lobbyStore.getByLobbyId(session.lobbyId);
+  if (lobby) {
+    sendText(socket, toLobbyStateEvent(lobby.state));
+  }
+
+  const game =
+    session.gameId === null
+      ? null
+      : dependencies.gameStore.getByGameId(session.gameId) ??
+        dependencies.gameStore.findByLobbyId(session.lobbyId);
+  if (!game) {
+    return;
+  }
+
+  sendText(socket, toGameStateEvent(game.gameId, game.state));
+
+  const seat = lobby?.state.seats.find((candidate) => candidate.playerId === session.playerId);
+  if (!seat) {
+    return;
+  }
+
+  sendText(socket, toGamePrivateStateEvent(game.gameId, game.state, seat.seat));
 }
 
 export function createWsServer(options: WsServerOptions): WsServerHandle {
@@ -536,6 +576,7 @@ export function createWsServer(options: WsServerOptions): WsServerHandle {
           options.runtime.socketServer.bindSessionToGame(sessionId, gameId);
         }
 
+        sendSubscribeCatchup(options.runtime, socket, sessionId);
         sendControl(socket, {
           type: "ws.subscribed",
           payload: {

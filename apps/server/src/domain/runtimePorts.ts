@@ -137,6 +137,10 @@ export type RuntimeRealtimeFanoutPort = {
   bindSessionToGame(sessionId: SessionId, gameId: GameId): boolean;
   unbindSessionFromGame(sessionId: SessionId, gameId: GameId): boolean;
   listSessionRooms(sessionId: SessionId): RuntimeRealtimeRoomId[];
+  sendSessionEvents(
+    sessionId: SessionId,
+    events: readonly ServerToClientEvent[]
+  ): Promise<number>;
   broadcastLobbyEvents(
     lobbyId: LobbyId,
     events: readonly ServerToClientEvent[]

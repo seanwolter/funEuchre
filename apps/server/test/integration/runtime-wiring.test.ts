@@ -141,6 +141,7 @@ function asRealtimeFanoutPort(server: InMemorySocketServer): RuntimeRealtimeFano
     bindSessionToGame: server.bindSessionToGame.bind(server),
     unbindSessionFromGame: server.unbindSessionFromGame.bind(server),
     listSessionRooms: server.listSessionRooms.bind(server),
+    sendSessionEvents: server.sendSessionEvents.bind(server),
     broadcastLobbyEvents: server.broadcastLobbyEvents.bind(server),
     broadcastGameEvents: server.broadcastGameEvents.bind(server)
   };

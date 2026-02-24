@@ -133,6 +133,39 @@ export class InMemoryRealtimeBroker implements RealtimeBroker {
     return [...rooms];
   }
 
+  async sendSession(
+    sessionId: SessionId,
+    events: readonly ServerToClientEvent[]
+  ): Promise<{
+    delivered: boolean;
+    deliveredEventCount: number;
+  }> {
+    if (events.length === 0) {
+      return {
+        delivered: false,
+        deliveredEventCount: 0
+      };
+    }
+
+    const sink = this.sinksBySessionId.get(sessionId);
+    if (!sink) {
+      return {
+        delivered: false,
+        deliveredEventCount: 0
+      };
+    }
+
+    let deliveredEventCount = 0;
+    for (const event of events) {
+      await sink(cloneEvent(event));
+      deliveredEventCount += 1;
+    }
+    return {
+      delivered: true,
+      deliveredEventCount
+    };
+  }
+
   async publish(input: BrokerPublishRequest): Promise<BrokerPublishResult> {
     if (input.source !== "domain-transition") {
       return {

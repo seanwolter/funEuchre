@@ -41,6 +41,13 @@ export type RealtimeBroker = {
   joinRoom(sessionId: SessionId, roomId: RealtimeRoomId): boolean;
   leaveRoom(sessionId: SessionId, roomId: RealtimeRoomId): boolean;
   listSessionRooms(sessionId: SessionId): RealtimeRoomId[];
+  sendSession(
+    sessionId: SessionId,
+    events: readonly ServerToClientEvent[]
+  ): Promise<{
+    delivered: boolean;
+    deliveredEventCount: number;
+  }>;
   publish(input: BrokerPublishRequest): Promise<BrokerPublishResult>;
 };
 

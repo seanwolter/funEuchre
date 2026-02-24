@@ -331,6 +331,15 @@ export function mountLobbyPage(options: LobbyPageMountOptions): () => void {
       store: options.store,
       baseUrl: options.win.location.href,
       onLifecycle: (event) => {
+        if (event.status === "connected" || event.status === "subscribed") {
+          const tone = elements.feedback.dataset.tone;
+          const message = elements.feedback.textContent ?? "";
+          if (tone === "info" && message.toLowerCase().includes("realtime")) {
+            setFeedback("Realtime stream connected.", "info");
+          }
+          return;
+        }
+
         if (
           event.status === "connecting" ||
           event.status === "error" ||

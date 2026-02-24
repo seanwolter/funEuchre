@@ -61,6 +61,17 @@ export class InMemorySocketServer implements RuntimeRealtimeFanoutPort {
     return this.broker.listSessionRooms(sessionId);
   }
 
+  async sendSessionEvents(
+    sessionId: SessionId,
+    events: readonly ServerToClientEvent[]
+  ): Promise<number> {
+    const result = await this.broker.sendSession(sessionId, events);
+    if (result.delivered && result.deliveredEventCount > 0) {
+      this.metrics?.observeOutbound(events);
+    }
+    return result.deliveredEventCount;
+  }
+
   async broadcastLobbyEvents(
     lobbyId: LobbyId,
     events: readonly ServerToClientEvent[]

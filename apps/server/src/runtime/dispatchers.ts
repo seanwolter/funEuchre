@@ -1,4 +1,4 @@
-import type { RejectCode, ServerToClientEvent } from "@fun-euchre/protocol";
+import type { RejectCode, Seat, ServerToClientEvent } from "@fun-euchre/protocol";
 import { applyGameAction, createInitialGameState } from "@fun-euchre/game-rules";
 import { GameManager } from "../domain/gameManager.js";
 import { parseGameId } from "../domain/ids.js";
@@ -9,7 +9,11 @@ import {
   startLobbyGame,
   updateLobbyDisplayName
 } from "../domain/lobby.js";
-import { toGameStateEvent, toLobbyStateEvent } from "../domain/protocolAdapter.js";
+import {
+  toGamePrivateStateEventsBySeat,
+  toGameStateEvent,
+  toLobbyStateEvent
+} from "../domain/protocolAdapter.js";
 import {
   resolveReconnectForfeit,
   type ReconnectPolicy
@@ -196,6 +200,33 @@ async function publishGameOutbound(
   outbound: readonly ServerToClientEvent[]
 ): Promise<void> {
   await dependencies.socketServer.broadcastGameEvents(gameId, outbound);
+}
+
+async function publishPrivateGameOutboundBySeat(
+  dependencies: RuntimeDispatcherDependencies,
+  lobbyId: LobbyId,
+  privateOutboundBySeat: Partial<Record<Seat, readonly ServerToClientEvent[]>>
+): Promise<void> {
+  const lobbyRecord = dependencies.lobbyStore.getByLobbyId(lobbyId);
+  if (!lobbyRecord) {
+    return;
+  }
+
+  for (const seat of lobbyRecord.state.seats) {
+    if (!seat.playerId) {
+      continue;
+    }
+    const session = dependencies.sessionStore.findByPlayerId(seat.playerId);
+    if (!session) {
+      continue;
+    }
+
+    const outbound = privateOutboundBySeat[seat.seat];
+    if (!outbound || outbound.length === 0) {
+      continue;
+    }
+    await dependencies.socketServer.sendSessionEvents(session.sessionId, outbound);
+  }
 }
 
 function createSweepResult(nowMs: number): ReconnectLifecycleSweepResult {
@@ -467,6 +498,16 @@ export function createRuntimeDispatchers(
           toGameStateEvent(nextGameId, dealtState.state)
         ];
         await publishLobbyOutbound(dependencies, command.lobbyId, outbound);
+        const privateOutboundBySeat = toGamePrivateStateEventsBySeat(
+          nextGameId,
+          dealtState.state
+        );
+        await publishPrivateGameOutboundBySeat(dependencies, command.lobbyId, {
+          north: [privateOutboundBySeat.north],
+          east: [privateOutboundBySeat.east],
+          south: [privateOutboundBySeat.south],
+          west: [privateOutboundBySeat.west]
+        });
 
         return {
           ok: true,
@@ -494,6 +535,14 @@ export function createRuntimeDispatchers(
       dependencies.requestCheckpoint?.();
     }
     await publishGameOutbound(dependencies, command.gameId, submitted.outbound);
+    const gameRecord = dependencies.gameStore.getByGameId(command.gameId);
+    if (gameRecord) {
+      await publishPrivateGameOutboundBySeat(
+        dependencies,
+        gameRecord.lobbyId,
+        submitted.privateOutboundBySeat
+      );
+    }
     return {
       ok: true,
       outbound: submitted.outbound
