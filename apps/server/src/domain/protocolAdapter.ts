@@ -2,8 +2,10 @@ import {
   PROTOCOL_VERSION,
   type ActionRejectedEvent,
   type ClientToServerEvent,
+  type GamePrivateStateEvent,
   type GamePlayCardEvent,
   type GameStateEvent,
+  type GameStatePayload,
   type LobbyStateEvent,
   type NoticeSeverity,
   type RejectCode,
@@ -12,8 +14,11 @@ import {
 } from "@fun-euchre/protocol";
 import {
   applyGameAction,
+  availableRoundTwoTrumpSuits,
+  formatCardId,
   nextSeat,
   parseCardId,
+  parseSuit,
   type GameAction,
   type GameRejectCode,
   type GameState,
@@ -67,12 +72,39 @@ export type GamePlayCardCommand = {
   action: PlayCardGameAction;
 };
 
+export type GamePassCommand = {
+  kind: "game.pass";
+  requestId: string;
+  gameId: GameId;
+  action: GameAction;
+};
+
+export type GameOrderUpCommand = {
+  kind: "game.order_up";
+  requestId: string;
+  gameId: GameId;
+  action: GameAction;
+};
+
+export type GameCallTrumpCommand = {
+  kind: "game.call_trump";
+  requestId: string;
+  gameId: GameId;
+  action: GameAction;
+};
+
+export type GameCommand =
+  | GamePlayCardCommand
+  | GamePassCommand
+  | GameOrderUpCommand
+  | GameCallTrumpCommand;
+
 export type DomainCommand =
   | LobbyCreateCommand
   | LobbyJoinCommand
   | LobbyUpdateNameCommand
   | LobbyStartCommand
-  | GamePlayCardCommand;
+  | GameCommand;
 
 export type DomainRejectCode = LobbyRejectCode | GameRejectCode;
 
@@ -201,21 +233,125 @@ export function toLobbyStateEvent(state: LobbyState): LobbyStateEvent {
 }
 
 export function toGameStateEvent(gameId: GameId, state: GameState): GameStateEvent {
+  const trick =
+    state.trick === null
+      ? null
+      : {
+          leader: state.trick.leader,
+          leadSuit: state.trick.leadSuit,
+          complete: state.trick.complete,
+          winner: state.trick.winner,
+          plays: state.trick.plays.map((play) => ({
+            seat: play.seat,
+            cardId: formatCardId(play.card)
+          }))
+        };
+  const bidding =
+    state.bidding === null
+      ? null
+      : {
+          round: state.bidding.round,
+          turn: state.bidding.turn,
+          upcardSuit: state.bidding.upcardSuit,
+          turnedDownSuit: state.bidding.turnedDownSuit,
+          passesInRound: state.bidding.passesInRound,
+          maker: state.bidding.maker,
+          trump: state.bidding.trump,
+          alone: state.bidding.alone,
+          availableTrumpSuits: availableRoundTwoTrumpSuits(state.bidding)
+        };
+  const payload: GameStatePayload = {
+    gameId,
+    phase: state.phase,
+    handNumber: state.handNumber,
+    trickNumber: deriveTrickNumber(state),
+    dealer: state.dealer,
+    turn: deriveTurn(state),
+    trump: state.trump,
+    maker: state.maker,
+    alone: state.alone,
+    partnerSitsOut: state.partnerSitsOut,
+    bidding,
+    trick,
+    scores: {
+      teamA: state.scores.teamA,
+      teamB: state.scores.teamB
+    }
+  };
+
   return {
     version: PROTOCOL_VERSION,
     type: "game.state",
+    payload
+  };
+}
+
+function legalPlayableCardIds(state: GameState, seat: Seat): string[] {
+  if (state.phase !== "play" || !state.hands || !state.trick || state.trick.turn !== seat) {
+    return [];
+  }
+
+  const hand = state.hands[seat];
+  const legalCardIds: string[] = [];
+  for (const card of hand) {
+    const attempted = applyGameAction(state, {
+      type: "play_card",
+      actor: seat,
+      card
+    });
+    if (attempted.ok) {
+      legalCardIds.push(formatCardId(card));
+    }
+  }
+
+  return legalCardIds;
+}
+
+export function toGamePrivateStateEvent(
+  gameId: GameId,
+  state: GameState,
+  seat: Seat
+): GamePrivateStateEvent {
+  const handCardIds =
+    state.hands === null ? [] : state.hands[seat].map((card) => formatCardId(card));
+  const isBiddingTurn =
+    (state.phase === "round1_bidding" || state.phase === "round2_bidding") &&
+    state.bidding !== null &&
+    state.bidding.turn === seat;
+  const canPass = isBiddingTurn;
+  const canOrderUp = state.phase === "round1_bidding" && isBiddingTurn;
+  const callableTrumpSuits =
+    state.phase === "round2_bidding" && state.bidding !== null && isBiddingTurn
+      ? availableRoundTwoTrumpSuits(state.bidding)
+      : [];
+
+  return {
+    version: PROTOCOL_VERSION,
+    type: "game.private_state",
     payload: {
       gameId,
-      handNumber: state.handNumber,
-      trickNumber: deriveTrickNumber(state),
-      dealer: state.dealer,
-      turn: deriveTurn(state),
-      trump: state.trump,
-      scores: {
-        teamA: state.scores.teamA,
-        teamB: state.scores.teamB
+      seat,
+      phase: state.phase,
+      handCardIds,
+      legalActions: {
+        playableCardIds: legalPlayableCardIds(state, seat),
+        canPass,
+        canOrderUp,
+        callableTrumpSuits
       }
     }
+  };
+}
+
+export function toGamePrivateStateEventsBySeat(
+  gameId: GameId,
+  state: GameState
+): Record<Seat, GamePrivateStateEvent> {
+  return {
+    north: toGamePrivateStateEvent(gameId, state, "north"),
+    east: toGamePrivateStateEvent(gameId, state, "east"),
+    south: toGamePrivateStateEvent(gameId, state, "south"),
+    west: toGamePrivateStateEvent(gameId, state, "west")
   };
 }
 
@@ -327,6 +463,95 @@ export function toDomainCommand(event: ClientToServerEvent): AdapterResult<Domai
         }
       };
     }
+
+    case "game.pass": {
+      const gameId = parseGameId(event.payload.gameId);
+      if (!gameId) {
+        return reject("INVALID_ACTION", "game.pass payload.gameId is invalid.");
+      }
+
+      return {
+        ok: true,
+        data: {
+          kind: "game.pass",
+          requestId: event.requestId,
+          gameId,
+          action: {
+            type: "bidding",
+            action: {
+              type: "pass",
+              actor: event.payload.actorSeat
+            }
+          }
+        }
+      };
+    }
+
+    case "game.order_up": {
+      const gameId = parseGameId(event.payload.gameId);
+      if (!gameId) {
+        return reject("INVALID_ACTION", "game.order_up payload.gameId is invalid.");
+      }
+
+      return {
+        ok: true,
+        data: {
+          kind: "game.order_up",
+          requestId: event.requestId,
+          gameId,
+          action: {
+            type: "bidding",
+            action:
+              event.payload.alone === undefined
+                ? {
+                    type: "order_up",
+                    actor: event.payload.actorSeat
+                  }
+                : {
+                    type: "order_up",
+                    actor: event.payload.actorSeat,
+                    alone: event.payload.alone
+                  }
+          }
+        }
+      };
+    }
+
+    case "game.call_trump": {
+      const gameId = parseGameId(event.payload.gameId);
+      if (!gameId) {
+        return reject("INVALID_ACTION", "game.call_trump payload.gameId is invalid.");
+      }
+      const trump = parseSuit(event.payload.trump);
+      if (!trump) {
+        return reject("INVALID_ACTION", "game.call_trump payload.trump is invalid.");
+      }
+
+      return {
+        ok: true,
+        data: {
+          kind: "game.call_trump",
+          requestId: event.requestId,
+          gameId,
+          action: {
+            type: "bidding",
+            action:
+              event.payload.alone === undefined
+                ? {
+                    type: "call_trump",
+                    actor: event.payload.actorSeat,
+                    trump
+                  }
+                : {
+                    type: "call_trump",
+                    actor: event.payload.actorSeat,
+                    trump,
+                    alone: event.payload.alone
+                  }
+          }
+        }
+      };
+    }
   }
 }
 
@@ -346,6 +571,13 @@ export function toGamePlayCardAction(
     );
   }
 
+  if (mapped.data.action.type !== "play_card") {
+    return reject(
+      "INVALID_ACTION",
+      `Unsupported action "${mapped.data.action.type}" for play-card mapping.`
+    );
+  }
+
   if (mapped.data.gameId !== activeGameId) {
     return reject(
       "INVALID_ACTION",
@@ -357,6 +589,15 @@ export function toGamePlayCardAction(
     ok: true,
     data: mapped.data.action
   };
+}
+
+function isGameCommand(command: DomainCommand): command is GameCommand {
+  return (
+    command.kind === "game.play_card" ||
+    command.kind === "game.pass" ||
+    command.kind === "game.order_up" ||
+    command.kind === "game.call_trump"
+  );
 }
 
 export function applyProtocolEventToGameState(
@@ -374,7 +615,7 @@ export function applyProtocolEventToGameState(
     };
   }
 
-  if (mapped.data.kind !== "game.play_card") {
+  if (!isGameCommand(mapped.data)) {
     return {
       state,
       outbound: [

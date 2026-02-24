@@ -4,6 +4,14 @@ export const SEAT_VALUES = ["north", "east", "south", "west"] as const;
 export const TEAM_VALUES = ["teamA", "teamB"] as const;
 export const SUIT_VALUES = ["clubs", "diamonds", "hearts", "spades"] as const;
 export const LOBBY_PHASE_VALUES = ["waiting", "in_game", "completed"] as const;
+export const GAME_PHASE_VALUES = [
+  "deal",
+  "round1_bidding",
+  "round2_bidding",
+  "play",
+  "score",
+  "completed"
+] as const;
 export const REJECT_CODE_VALUES = [
   "NOT_YOUR_TURN",
   "INVALID_ACTION",
@@ -16,6 +24,7 @@ export type Seat = (typeof SEAT_VALUES)[number];
 export type Team = (typeof TEAM_VALUES)[number];
 export type Suit = (typeof SUIT_VALUES)[number];
 export type LobbyPhase = (typeof LOBBY_PHASE_VALUES)[number];
+export type GamePhase = (typeof GAME_PHASE_VALUES)[number];
 export type RejectCode = (typeof REJECT_CODE_VALUES)[number];
 export type NoticeSeverity = (typeof NOTICE_SEVERITY_VALUES)[number];
 
@@ -39,6 +48,31 @@ export type LobbyStatePayload = {
   seats: LobbySeatState[];
 };
 
+export type BiddingStateSummary = {
+  round: 1 | 2;
+  turn: Seat;
+  upcardSuit: Suit;
+  turnedDownSuit: Suit;
+  passesInRound: number;
+  maker: Seat | null;
+  trump: Suit | null;
+  alone: boolean;
+  availableTrumpSuits: Suit[];
+};
+
+export type TrickPlaySummary = {
+  seat: Seat;
+  cardId: string;
+};
+
+export type TrickStateSummary = {
+  leader: Seat;
+  leadSuit: Suit | null;
+  complete: boolean;
+  winner: Seat | null;
+  plays: TrickPlaySummary[];
+};
+
 export type GameStatePayload = {
   gameId: string;
   handNumber: number;
@@ -47,6 +81,27 @@ export type GameStatePayload = {
   turn: Seat;
   trump: Suit | null;
   scores: TeamScore;
+  phase?: GamePhase;
+  maker?: Seat | null;
+  alone?: boolean;
+  partnerSitsOut?: Seat | null;
+  bidding?: BiddingStateSummary | null;
+  trick?: TrickStateSummary | null;
+};
+
+export type GameLegalActionsPayload = {
+  playableCardIds: string[];
+  canPass: boolean;
+  canOrderUp: boolean;
+  callableTrumpSuits: Suit[];
+};
+
+export type GamePrivateStatePayload = {
+  gameId: string;
+  seat: Seat;
+  phase: GamePhase;
+  handCardIds: string[];
+  legalActions: GameLegalActionsPayload;
 };
 
 export type ActionRejectedPayload = {
@@ -115,15 +170,49 @@ export type GamePlayCardEvent = ClientEventBase<
   }
 >;
 
+export type GamePassEvent = ClientEventBase<
+  "game.pass",
+  {
+    gameId: string;
+    actorSeat: Seat;
+  }
+>;
+
+export type GameOrderUpEvent = ClientEventBase<
+  "game.order_up",
+  {
+    gameId: string;
+    actorSeat: Seat;
+    alone?: boolean;
+  }
+>;
+
+export type GameCallTrumpEvent = ClientEventBase<
+  "game.call_trump",
+  {
+    gameId: string;
+    actorSeat: Seat;
+    trump: Suit;
+    alone?: boolean;
+  }
+>;
+
 export type ClientToServerEvent =
   | LobbyCreateEvent
   | LobbyJoinEvent
   | LobbyUpdateNameEvent
   | LobbyStartEvent
-  | GamePlayCardEvent;
+  | GamePlayCardEvent
+  | GamePassEvent
+  | GameOrderUpEvent
+  | GameCallTrumpEvent;
 
 export type LobbyStateEvent = ServerEventBase<"lobby.state", LobbyStatePayload>;
 export type GameStateEvent = ServerEventBase<"game.state", GameStatePayload>;
+export type GamePrivateStateEvent = ServerEventBase<
+  "game.private_state",
+  GamePrivateStatePayload
+>;
 export type ActionRejectedEvent = ServerEventBase<
   "action.rejected",
   ActionRejectedPayload
@@ -133,6 +222,7 @@ export type SystemNoticeEvent = ServerEventBase<"system.notice", SystemNoticePay
 export type ServerToClientEvent =
   | LobbyStateEvent
   | GameStateEvent
+  | GamePrivateStateEvent
   | ActionRejectedEvent
   | SystemNoticeEvent;
 
@@ -192,6 +282,18 @@ function asOptionalString(input: unknown): string | null | undefined {
   return asNonEmptyString(input);
 }
 
+function asOptionalBoolean(input: unknown): boolean | undefined | null {
+  if (input === undefined) {
+    return undefined;
+  }
+
+  if (typeof input === "boolean") {
+    return input;
+  }
+
+  return null;
+}
+
 function asNonNegativeInteger(input: unknown): number | null {
   if (!Number.isInteger(input)) {
     return null;
@@ -216,6 +318,39 @@ function parseTeamScore(input: unknown): TeamScore | null {
   }
 
   return { teamA, teamB };
+}
+
+function parseNonEmptyStringArray(input: unknown): string[] | null {
+  if (!Array.isArray(input)) {
+    return null;
+  }
+
+  const result: string[] = [];
+  for (const entry of input) {
+    const value = asNonEmptyString(entry);
+    if (!value) {
+      return null;
+    }
+    result.push(value);
+  }
+
+  return result;
+}
+
+function parseSuitArray(input: unknown): Suit[] | null {
+  if (!Array.isArray(input)) {
+    return null;
+  }
+
+  const result: Suit[] = [];
+  for (const entry of input) {
+    if (!isEnumValue(entry, SUIT_VALUES)) {
+      return null;
+    }
+    result.push(entry);
+  }
+
+  return result;
 }
 
 function parseLobbySeats(input: unknown): LobbySeatState[] | null {
@@ -258,6 +393,151 @@ function parseLobbySeats(input: unknown): LobbySeatState[] | null {
   }
 
   return result;
+}
+
+function parseBiddingStateSummary(input: unknown): BiddingStateSummary | null {
+  if (!isRecord(input)) {
+    return null;
+  }
+
+  const round = input.round;
+  const turn = input.turn;
+  const upcardSuit = input.upcardSuit;
+  const turnedDownSuit = input.turnedDownSuit;
+  const passesInRound = asNonNegativeInteger(input.passesInRound);
+  const makerRaw = input.maker;
+  const trumpRaw = input.trump;
+  const alone = input.alone;
+  const availableTrumpSuits = parseSuitArray(input.availableTrumpSuits);
+
+  const maker =
+    makerRaw === null
+      ? null
+      : isEnumValue(makerRaw, SEAT_VALUES)
+        ? makerRaw
+        : undefined;
+  const trump =
+    trumpRaw === null
+      ? null
+      : isEnumValue(trumpRaw, SUIT_VALUES)
+        ? trumpRaw
+        : undefined;
+  if (
+    (round !== 1 && round !== 2) ||
+    !isEnumValue(turn, SEAT_VALUES) ||
+    !isEnumValue(upcardSuit, SUIT_VALUES) ||
+    !isEnumValue(turnedDownSuit, SUIT_VALUES) ||
+    passesInRound === null ||
+    maker === undefined ||
+    trump === undefined ||
+    typeof alone !== "boolean" ||
+    availableTrumpSuits === null
+  ) {
+    return null;
+  }
+
+  return {
+    round,
+    turn,
+    upcardSuit,
+    turnedDownSuit,
+    passesInRound,
+    maker,
+    trump,
+    alone,
+    availableTrumpSuits
+  };
+}
+
+function parseTrickPlaySummaryList(input: unknown): TrickPlaySummary[] | null {
+  if (!Array.isArray(input)) {
+    return null;
+  }
+
+  const result: TrickPlaySummary[] = [];
+  for (const entry of input) {
+    if (!isRecord(entry)) {
+      return null;
+    }
+    const seat = entry.seat;
+    const cardId = asNonEmptyString(entry.cardId);
+    if (!isEnumValue(seat, SEAT_VALUES) || !cardId) {
+      return null;
+    }
+    result.push({
+      seat,
+      cardId
+    });
+  }
+
+  return result;
+}
+
+function parseTrickStateSummary(input: unknown): TrickStateSummary | null {
+  if (!isRecord(input)) {
+    return null;
+  }
+
+  const leader = input.leader;
+  const leadSuitRaw = input.leadSuit;
+  const complete = input.complete;
+  const winnerRaw = input.winner;
+  const plays = parseTrickPlaySummaryList(input.plays);
+  const leadSuit =
+    leadSuitRaw === null
+      ? null
+      : isEnumValue(leadSuitRaw, SUIT_VALUES)
+        ? leadSuitRaw
+        : undefined;
+  const winner =
+    winnerRaw === null
+      ? null
+      : isEnumValue(winnerRaw, SEAT_VALUES)
+        ? winnerRaw
+        : undefined;
+  if (
+    !isEnumValue(leader, SEAT_VALUES) ||
+    leadSuit === undefined ||
+    typeof complete !== "boolean" ||
+    winner === undefined ||
+    plays === null
+  ) {
+    return null;
+  }
+
+  return {
+    leader,
+    leadSuit,
+    complete,
+    winner,
+    plays
+  };
+}
+
+function parseGameLegalActions(input: unknown): GameLegalActionsPayload | null {
+  if (!isRecord(input)) {
+    return null;
+  }
+
+  const playableCardIds = parseNonEmptyStringArray(input.playableCardIds);
+  const canPass = input.canPass;
+  const canOrderUp = input.canOrderUp;
+  const callableTrumpSuits = parseSuitArray(input.callableTrumpSuits);
+  if (
+    playableCardIds === null ||
+    typeof canPass !== "boolean" ||
+    typeof canOrderUp !== "boolean" ||
+    callableTrumpSuits === null
+  ) {
+    return null;
+  }
+
+  return {
+    playableCardIds,
+    canPass,
+    canOrderUp,
+    callableTrumpSuits
+  };
 }
 
 function parseClientBase(
@@ -419,6 +699,83 @@ export function validateClientToServerEvent(
       });
     }
 
+    case "game.pass": {
+      const gameId = asNonEmptyString(payload.gameId);
+      const actorSeat = payload.actorSeat;
+      if (!gameId || !isEnumValue(actorSeat, SEAT_VALUES)) {
+        return fail(
+          "game.pass payload must include non-empty gameId and a valid actorSeat."
+        );
+      }
+
+      return ok({
+        version: PROTOCOL_VERSION,
+        type,
+        requestId,
+        payload: { gameId, actorSeat }
+      });
+    }
+
+    case "game.order_up": {
+      const gameId = asNonEmptyString(payload.gameId);
+      const actorSeat = payload.actorSeat;
+      const alone = asOptionalBoolean(payload.alone);
+      if (!gameId || !isEnumValue(actorSeat, SEAT_VALUES) || alone === null) {
+        return fail(
+          "game.order_up payload must include non-empty gameId, valid actorSeat, and optional alone boolean."
+        );
+      }
+
+      if (alone === undefined) {
+        return ok({
+          version: PROTOCOL_VERSION,
+          type,
+          requestId,
+          payload: { gameId, actorSeat }
+        });
+      }
+
+      return ok({
+        version: PROTOCOL_VERSION,
+        type,
+        requestId,
+        payload: { gameId, actorSeat, alone }
+      });
+    }
+
+    case "game.call_trump": {
+      const gameId = asNonEmptyString(payload.gameId);
+      const actorSeat = payload.actorSeat;
+      const trump = payload.trump;
+      const alone = asOptionalBoolean(payload.alone);
+      if (
+        !gameId ||
+        !isEnumValue(actorSeat, SEAT_VALUES) ||
+        !isEnumValue(trump, SUIT_VALUES) ||
+        alone === null
+      ) {
+        return fail(
+          "game.call_trump payload must include non-empty gameId, valid actorSeat/trump, and optional alone boolean."
+        );
+      }
+
+      if (alone === undefined) {
+        return ok({
+          version: PROTOCOL_VERSION,
+          type,
+          requestId,
+          payload: { gameId, actorSeat, trump }
+        });
+      }
+
+      return ok({
+        version: PROTOCOL_VERSION,
+        type,
+        requestId,
+        payload: { gameId, actorSeat, trump, alone }
+      });
+    }
+
     default:
       return fail(`Unknown client event type "${type}".`);
   }
@@ -466,12 +823,73 @@ export function validateServerToClientEvent(
       const turn = payload.turn;
       const trumpRaw = payload.trump;
       const scores = parseTeamScore(payload.scores);
+      const phaseRaw = payload.phase;
+      const makerRaw = payload.maker;
+      const aloneRaw = payload.alone;
+      const partnerSitsOutRaw = payload.partnerSitsOut;
+      const biddingRaw = payload.bidding;
+      const trickRaw = payload.trick;
       const trump =
         trumpRaw === null
           ? null
           : isEnumValue(trumpRaw, SUIT_VALUES)
             ? trumpRaw
             : undefined;
+      const phase =
+        phaseRaw === undefined
+          ? undefined
+          : isEnumValue(phaseRaw, GAME_PHASE_VALUES)
+            ? phaseRaw
+            : undefined;
+      const phaseValid =
+        phaseRaw === undefined || isEnumValue(phaseRaw, GAME_PHASE_VALUES);
+      const maker =
+        makerRaw === undefined
+          ? undefined
+          : makerRaw === null
+            ? null
+            : isEnumValue(makerRaw, SEAT_VALUES)
+              ? makerRaw
+              : undefined;
+      const makerValid =
+        makerRaw === undefined ||
+        makerRaw === null ||
+        isEnumValue(makerRaw, SEAT_VALUES);
+      const alone =
+        aloneRaw === undefined
+          ? undefined
+          : typeof aloneRaw === "boolean"
+            ? aloneRaw
+            : undefined;
+      const aloneValid = aloneRaw === undefined || typeof aloneRaw === "boolean";
+      const partnerSitsOut =
+        partnerSitsOutRaw === undefined
+          ? undefined
+          : partnerSitsOutRaw === null
+            ? null
+            : isEnumValue(partnerSitsOutRaw, SEAT_VALUES)
+              ? partnerSitsOutRaw
+              : undefined;
+      const partnerSitsOutValid =
+        partnerSitsOutRaw === undefined ||
+        partnerSitsOutRaw === null ||
+        isEnumValue(partnerSitsOutRaw, SEAT_VALUES);
+      const parsedBidding =
+        biddingRaw === undefined || biddingRaw === null
+          ? null
+          : parseBiddingStateSummary(biddingRaw);
+      const bidding =
+        biddingRaw === undefined ? undefined : biddingRaw === null ? null : parsedBidding;
+      const biddingValid =
+        biddingRaw === undefined || biddingRaw === null || parsedBidding !== null;
+      const parsedTrick =
+        trickRaw === undefined || trickRaw === null
+          ? null
+          : parseTrickStateSummary(trickRaw);
+      const trick =
+        trickRaw === undefined ? undefined : trickRaw === null ? null : parsedTrick;
+      const trickValid =
+        trickRaw === undefined || trickRaw === null || parsedTrick !== null;
 
       if (
         !gameId ||
@@ -480,10 +898,69 @@ export function validateServerToClientEvent(
         !isEnumValue(dealer, SEAT_VALUES) ||
         !isEnumValue(turn, SEAT_VALUES) ||
         trump === undefined ||
-        !scores
+        !scores ||
+        !phaseValid ||
+        !makerValid ||
+        !aloneValid ||
+        !partnerSitsOutValid ||
+        !biddingValid ||
+        !trickValid
       ) {
         return fail(
-          "game.state payload must include valid ids, non-negative counters, valid dealer/turn, trump (or null), and scores."
+          "game.state payload must include valid ids, non-negative counters, valid dealer/turn, trump (or null), scores, and valid optional projection fields."
+        );
+      }
+
+      const statePayload: GameStatePayload = {
+        gameId,
+        handNumber,
+        trickNumber,
+        dealer,
+        turn,
+        trump,
+        scores
+      };
+      if (phase !== undefined) {
+        statePayload.phase = phase;
+      }
+      if (maker !== undefined) {
+        statePayload.maker = maker;
+      }
+      if (alone !== undefined) {
+        statePayload.alone = alone;
+      }
+      if (partnerSitsOut !== undefined) {
+        statePayload.partnerSitsOut = partnerSitsOut;
+      }
+      if (bidding !== undefined) {
+        statePayload.bidding = bidding;
+      }
+      if (trick !== undefined) {
+        statePayload.trick = trick;
+      }
+
+      return ok({
+        version: PROTOCOL_VERSION,
+        type,
+        payload: statePayload
+      });
+    }
+
+    case "game.private_state": {
+      const gameId = asNonEmptyString(payload.gameId);
+      const seat = payload.seat;
+      const phase = payload.phase;
+      const handCardIds = parseNonEmptyStringArray(payload.handCardIds);
+      const legalActions = parseGameLegalActions(payload.legalActions);
+      if (
+        !gameId ||
+        !isEnumValue(seat, SEAT_VALUES) ||
+        !isEnumValue(phase, GAME_PHASE_VALUES) ||
+        handCardIds === null ||
+        legalActions === null
+      ) {
+        return fail(
+          "game.private_state payload must include valid gameId/seat/phase, handCardIds, and legalActions."
         );
       }
 
@@ -492,12 +969,10 @@ export function validateServerToClientEvent(
         type,
         payload: {
           gameId,
-          handNumber,
-          trickNumber,
-          dealer,
-          turn,
-          trump,
-          scores
+          seat,
+          phase,
+          handCardIds,
+          legalActions
         }
       });
     }

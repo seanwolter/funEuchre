@@ -1,79 +1,67 @@
 # funEuchre
 
-Multiplayer web Euchre MVP (monorepo) with:
-- `apps/server` for the authoritative game server
-- `apps/web` for the browser client
-- `packages/protocol` for shared event contracts
-- `packages/game-rules` for deterministic Euchre domain rules
+Monorepo for the multiplayer web Euchre MVP.
 
-## Server Contract
+## Packages
 
-For Phase 4 client integration details (HTTP endpoints, event envelopes, realtime room model, and sample flows), see:
-
-- `apps/server/README.md`
+- `apps/server` - authoritative runtime, HTTP API, websocket transport
+- `apps/web` - browser client (lobby/game/help UI)
+- `packages/protocol` - shared event schemas and validators
+- `packages/game-rules` - deterministic Euchre rules engine
 
 ## Prerequisites
 
-- Node.js `22.x` (recommended to match CI)
+- Node.js `22.x` (recommended)
 - `pnpm` `10.x`
-
-Check your tools:
 
 ```bash
 node --version
 pnpm --version
 ```
 
-## Initial Setup
-
-From the repository root:
+## Install
 
 ```bash
 pnpm install
 ```
 
-## Core Commands
-
-Run from repo root:
-
-```bash
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm build
-```
-
-## Local Development
-
-Start both apps in parallel:
+## Primary Commands
 
 ```bash
 pnpm dev
+pnpm test
+pnpm lint
+pnpm typecheck
+pnpm build
 ```
 
-Or run each app explicitly in separate terminals:
+## App-Specific Commands
 
 ```bash
 pnpm --filter @fun-euchre/server dev
+pnpm --filter @fun-euchre/server test
 ```
 
 ```bash
 pnpm --filter @fun-euchre/web dev
+pnpm --filter @fun-euchre/web test
 ```
 
-## Quick Verification
+## Runtime Docs
 
-Server health endpoint:
+- Server runtime + transport contract: `apps/server/README.md`
+- Web runtime + client-state architecture: `apps/web/README.md`
 
-```bash
-curl -i http://127.0.0.1:3000/health
-```
+## Local Multi-Client Smoke Flow
 
-Expected: HTTP `200` and a JSON payload with `"status":"ok"`.
+1. Start server and web dev processes.
+2. In browser A, create a lobby.
+3. In browsers B/C/D (incognito or separate profiles), join with invite link.
+4. Start game from host and submit at least one bid and one gameplay action.
+5. Disconnect one client and reconnect with stored reconnect token.
+6. Confirm all clients converge on the same lobby/game projections.
 
-Web shell:
-- Open `http://127.0.0.1:5173` in your browser.
-- Confirm the shell renders and route tabs (`Lobby`, `Game`, `Help`) are visible.
+## Troubleshooting Links
 
-Rules package docs:
-- See `packages/game-rules/README.md` for public API, invariants, and reducer usage examples.
+- Reconnect and websocket troubleshooting: `apps/server/README.md`
+- Client bootstrap/session troubleshooting: `apps/web/README.md`

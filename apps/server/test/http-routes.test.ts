@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import test from "node:test";
+import type { ServerToClientEvent } from "@fun-euchre/protocol";
 import { createAppRouter } from "../src/http/router.js";
-import { createLobbyRoutes, type LobbyCommandDispatcher } from "../src/http/lobbyRoutes.js";
+import {
+  type CommandDispatchSuccess,
+  createLobbyRoutes,
+  type LobbyCommandDispatchIdentity,
+  type LobbyCommandDispatcher
+} from "../src/http/lobbyRoutes.js";
 import { createGameRoutes, type GameCommandDispatcher } from "../src/http/gameRoutes.js";
 
 type ResponseState = {
@@ -88,19 +94,44 @@ test("lobby routes validate payloads and dispatch mapped commands", async () => 
   const seenKinds: string[] = [];
   const dispatcher: LobbyCommandDispatcher = (command) => {
     seenKinds.push(command.kind);
-    return {
-      ok: true,
-      outbound: [
-        {
-          version: 1,
-          type: "system.notice",
-          payload: {
-            severity: "info",
-            message: `processed ${command.kind}`
-          }
+    let identity: LobbyCommandDispatchIdentity | undefined;
+    if (command.kind === "lobby.create") {
+      identity = {
+        lobbyId: "lobby-1",
+        playerId: "player-1",
+        sessionId: "session-1",
+        reconnectToken: "token-1"
+      };
+    } else if (command.kind === "lobby.join") {
+      identity = {
+        lobbyId: command.lobbyId,
+        playerId: "player-2",
+        sessionId: "session-2",
+        reconnectToken: "token-2"
+      };
+    }
+    const outbound: ServerToClientEvent[] = [
+      {
+        version: 1,
+        type: "system.notice",
+        payload: {
+          severity: "info",
+          message: `processed ${command.kind}`
         }
-      ]
+      }
+    ];
+    const success: CommandDispatchSuccess = {
+      ok: true,
+      outbound
     };
+    if (identity) {
+      return {
+        ...success,
+        identity
+      };
+    }
+
+    return success;
   };
   const router = createAppRouter({
     lobbyRoutes: createLobbyRoutes({ dispatchCommand: dispatcher })
@@ -117,6 +148,12 @@ test("lobby routes validate payloads and dispatch mapped commands", async () => 
   assert.equal(createResponse.state.statusCode, 200);
   assert.deepEqual(JSON.parse(createResponse.state.body ?? "{}"), {
     requestId: "req-create",
+    identity: {
+      lobbyId: "lobby-1",
+      playerId: "player-1",
+      sessionId: "session-1",
+      reconnectToken: "token-1"
+    },
     outbound: [
       {
         version: 1,
@@ -140,6 +177,25 @@ test("lobby routes validate payloads and dispatch mapped commands", async () => 
     joinResponse.response
   );
   assert.equal(joinResponse.state.statusCode, 200);
+  assert.deepEqual(JSON.parse(joinResponse.state.body ?? "{}"), {
+    requestId: "req-join",
+    identity: {
+      lobbyId: "lobby-1",
+      playerId: "player-2",
+      sessionId: "session-2",
+      reconnectToken: "token-2"
+    },
+    outbound: [
+      {
+        version: 1,
+        type: "system.notice",
+        payload: {
+          severity: "info",
+          message: "processed lobby.join"
+        }
+      }
+    ]
+  });
 
   const renameResponse = createMockResponse();
   await router(

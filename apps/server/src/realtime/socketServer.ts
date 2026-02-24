@@ -29,6 +29,10 @@ export class InMemorySocketServer {
     this.eventHub.connectSession(connection);
   }
 
+  hasSession(sessionId: SessionId): boolean {
+    return this.eventHub.hasSession(sessionId);
+  }
+
   disconnectSession(sessionId: SessionId): void {
     this.eventHub.disconnectSession(sessionId);
   }

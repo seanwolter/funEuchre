@@ -198,11 +198,23 @@ test("resolveReconnectForfeit emits clear notice and terminal game state for opp
     type: "game.state",
     payload: {
       gameId: "game-1",
+      phase: "completed",
       handNumber: state.handNumber,
       trickNumber: 0,
       dealer: state.dealer,
       turn: "east",
       trump: state.trump,
+      maker: state.maker,
+      alone: state.alone,
+      partnerSitsOut: state.partnerSitsOut,
+      bidding: null,
+      trick: {
+        leader: "north",
+        leadSuit: null,
+        complete: false,
+        winner: null,
+        plays: []
+      },
       scores: {
         teamA: 0,
         teamB: state.targetScore

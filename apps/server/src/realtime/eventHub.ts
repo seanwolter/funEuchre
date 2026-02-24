@@ -51,6 +51,10 @@ export class InMemoryEventHub {
   private readonly sessionIdsByRoomId = new Map<RealtimeRoomId, Set<SessionId>>();
   private readonly roomIdsBySessionId = new Map<SessionId, Set<RealtimeRoomId>>();
 
+  hasSession(sessionId: SessionId): boolean {
+    return this.sinksBySessionId.has(sessionId);
+  }
+
   connectSession(connection: SessionConnection): void {
     this.disconnectSession(connection.sessionId);
     this.sinksBySessionId.set(connection.sessionId, connection.send);

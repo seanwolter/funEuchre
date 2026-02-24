@@ -65,6 +65,9 @@ function correlationFromCommand(command: DomainCommand): {
     case "lobby.start":
       return { lobbyId: command.lobbyId, gameId: null, playerId: command.actorPlayerId };
     case "game.play_card":
+    case "game.pass":
+    case "game.order_up":
+    case "game.call_trump":
       return { lobbyId: null, gameId: command.gameId, playerId: null };
   }
 }

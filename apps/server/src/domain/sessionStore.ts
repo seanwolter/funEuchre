@@ -29,12 +29,33 @@ export type SessionStoreInput = {
   reconnectToken: ReconnectToken;
 };
 
+export type SessionIdentity = {
+  sessionId: SessionId;
+  playerId: PlayerId;
+  lobbyId: LobbyId;
+  reconnectToken: ReconnectToken;
+};
+
 export type InMemorySessionStoreOptions = {
   clock?: Clock;
   reconnectWindowMs?: number;
   ttlMs?: number | null;
   logger?: StructuredLogger;
 };
+
+export function toSessionIdentity(
+  record: Pick<
+    SessionStoreRecord,
+    "sessionId" | "playerId" | "lobbyId" | "reconnectToken"
+  >
+): SessionIdentity {
+  return {
+    sessionId: record.sessionId,
+    playerId: record.playerId,
+    lobbyId: record.lobbyId,
+    reconnectToken: record.reconnectToken
+  };
+}
 
 function cloneRecord(record: SessionStoreRecord): SessionStoreRecord {
   return {

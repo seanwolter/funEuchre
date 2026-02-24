@@ -1,25 +1,27 @@
-# @fun-euchre/server Runtime Contract
+# @fun-euchre/server
 
-This document defines the server-facing integration contract for Phase 4 client work.
+Authoritative multiplayer Euchre server runtime.
 
-It covers:
-- HTTP endpoints and payload shapes
-- outbound protocol events
-- realtime room/channel model
-- request/response error semantics
-- local run commands
-- end-to-end sample flows
+This README documents the current runtime wiring, HTTP + realtime contracts, local verification flow, and reconnect troubleshooting.
 
-## Current Runtime Notes
+## Runtime Wiring
 
-- `GET /health` and `HEAD /health` are fully wired in `createAppServer()`.
-- Lobby and action routes are wired, validate protocol payloads, and normalize responses.
-- Command execution for non-health routes depends on injected dispatchers/orchestration.
-- The default server bootstrap currently uses fallback dispatchers, so non-health routes can return:
-  - `INVALID_STATE` / `"Lobby command dispatcher is not configured."`
-  - `INVALID_STATE` / `"Game command dispatcher is not configured."`
+`createAppServer()` now wires a default runtime orchestrator by default:
 
-The contracts below are the intended stable client contract once orchestration is injected.
+- `apps/server/src/runtime/orchestrator.ts`
+- `apps/server/src/runtime/dispatchers.ts`
+- `apps/server/src/realtime/socketServer.ts`
+- `apps/server/src/realtime/wsServer.ts`
+
+Default orchestration composes:
+
+- in-memory lobby/game/session stores,
+- reconnect policy,
+- authoritative game manager,
+- lobby/game command dispatchers,
+- websocket transport bridge.
+
+This means lobby and action endpoints are live without custom dispatcher injection.
 
 ## Local Run
 
@@ -30,11 +32,16 @@ pnpm install
 pnpm --filter @fun-euchre/server dev
 ```
 
-From `apps/server`:
+Or from `apps/server`:
 
 ```bash
 pnpm dev
 ```
+
+Default bind:
+
+- host: `0.0.0.0`
+- port: `3000` (override with `PORT`)
 
 Health check:
 
@@ -42,116 +49,31 @@ Health check:
 curl -i http://127.0.0.1:3000/health
 ```
 
-## Protocol Version
+## HTTP Contract
 
-- Current protocol version: `1`
-- Source of truth:
-  - `packages/protocol/src/index.ts`
+Base URL: `http://127.0.0.1:3000`
 
-Client-to-server events must satisfy protocol validation in `@fun-euchre/protocol`.
-
-## HTTP API
-
-Base URL (local): `http://127.0.0.1:3000`
-
-### 1) Health
+### Endpoints
 
 - `GET /health`
 - `HEAD /health`
-
-`GET` response:
-
-```json
-{
-  "status": "ok",
-  "service": "fun-euchre-server",
-  "uptimeSeconds": 123
-}
-```
-
-### 2) Lobby Create
-
 - `POST /lobbies/create`
-
-Request body:
-
-```json
-{
-  "requestId": "req-create-1",
-  "displayName": "Host"
-}
-```
-
-### 3) Lobby Join
-
 - `POST /lobbies/join`
-
-Request body:
-
-```json
-{
-  "requestId": "req-join-1",
-  "lobbyId": "lobby-1",
-  "displayName": "Player",
-  "reconnectToken": "token-optional"
-}
-```
-
-`reconnectToken` is optional and may be omitted or `null`.
-
-### 4) Lobby Update Name
-
 - `POST /lobbies/update-name`
-
-Request body:
-
-```json
-{
-  "requestId": "req-rename-1",
-  "lobbyId": "lobby-1",
-  "playerId": "player-2",
-  "displayName": "Renamed"
-}
-```
-
-### 5) Lobby Start
-
 - `POST /lobbies/start`
-
-Request body:
-
-```json
-{
-  "requestId": "req-start-1",
-  "lobbyId": "lobby-1",
-  "actorPlayerId": "player-1"
-}
-```
-
-### 6) Submit Game Action
-
 - `POST /actions`
 
-Request body is a full protocol `ClientToServerEvent` envelope:
+### Command Request IDs
 
-```json
-{
-  "version": 1,
-  "type": "game.play_card",
-  "requestId": "req-play-1",
-  "payload": {
-    "gameId": "game-1",
-    "actorSeat": "north",
-    "cardId": "clubs:9"
-  }
-}
-```
+`requestId` resolution order:
 
-## Response Contract
+1. request body `requestId` (if non-empty)
+2. `x-request-id` header (if present)
+3. generated UUID
 
 ### Success Envelope
 
-All successful command endpoints return:
+All command endpoints return:
 
 ```json
 {
@@ -159,204 +81,146 @@ All successful command endpoints return:
   "outbound": [
     {
       "version": 1,
-      "type": "system.notice",
-      "payload": {
-        "severity": "info",
-        "message": "..."
-      }
+      "type": "lobby.state",
+      "payload": {}
     }
   ]
 }
 ```
 
-`outbound` contains one or more `ServerToClientEvent` payloads that should be handled by the client exactly as realtime-delivered events.
+`/lobbies/create` and `/lobbies/join` also return `identity`:
+
+```json
+{
+  "requestId": "req-123",
+  "identity": {
+    "lobbyId": "lobby-1",
+    "playerId": "player-1",
+    "sessionId": "session-1",
+    "reconnectToken": "token-1"
+  },
+  "outbound": []
+}
+```
 
 ### Error Envelope
-
-All normalized command errors return:
 
 ```json
 {
   "requestId": "req-123",
   "error": {
     "code": "INVALID_ACTION",
-    "message": "Human-readable error message.",
-    "issues": [
-      "Optional protocol validation details."
-    ]
+    "message": "Human-readable message.",
+    "issues": ["Optional validation details"]
   }
 }
 ```
 
-Status code mapping:
+Status mapping:
+
 - `400` => `INVALID_ACTION`
 - `403` => `UNAUTHORIZED`
-- `409` => `INVALID_STATE`, `NOT_YOUR_TURN`
+- `409` => `INVALID_STATE` / `NOT_YOUR_TURN`
 
-`requestId` resolution order:
-1. request body `requestId` when present and non-empty
-2. `x-request-id` request header when present
-3. generated UUID on server
+### Supported Client Events (`POST /actions`)
 
-## Supported Event Types
-
-### Client -> Server
-
-- `lobby.create`
-- `lobby.join`
-- `lobby.update_name`
-- `lobby.start`
+- `game.pass`
+- `game.order_up`
+- `game.call_trump`
 - `game.play_card`
 
-### Server -> Client
+### Outbound Server Events
 
 - `lobby.state`
 - `game.state`
 - `action.rejected`
 - `system.notice`
 
-## Event Payload Reference
+## Realtime WebSocket Contract
 
-### `lobby.state`
+Endpoint:
+
+- `GET /realtime/ws?sessionId=<id>&reconnectToken=<token>`
+
+Upgrade prerequisites:
+
+- valid session id,
+- reconnect token matches session,
+- reconnect window has not forfeited.
+
+Server control messages:
+
+- `ws.ready`
+- `ws.subscribed`
+- `ws.error`
+
+Client message:
 
 ```json
 {
-  "version": 1,
-  "type": "lobby.state",
+  "type": "subscribe",
+  "requestId": "req-1",
   "payload": {
     "lobbyId": "lobby-1",
-    "hostPlayerId": "player-1",
-    "phase": "waiting",
-    "seats": [
-      {
-        "seat": "north",
-        "team": "teamA",
-        "playerId": "player-1",
-        "displayName": "Host",
-        "connected": true
-      }
-    ]
+    "gameId": "game-1"
   }
 }
 ```
 
-### `game.state`
+Rules:
 
-```json
-{
-  "version": 1,
-  "type": "game.state",
-  "payload": {
-    "gameId": "game-1",
-    "handNumber": 1,
-    "trickNumber": 0,
-    "dealer": "north",
-    "turn": "east",
-    "trump": "hearts",
-    "scores": {
-      "teamA": 0,
-      "teamB": 0
-    }
-  }
-}
+- `lobbyId` must match the session's lobby.
+- optional `gameId` must match the session's bound game.
+- outbound protocol events (`lobby.state`, `game.state`, etc.) are sent as top-level websocket JSON messages.
+
+## Multi-Client Smoke Workflow
+
+1. Start server and web app.
+2. In browser A, create a lobby.
+3. In browser B/C/D (separate profiles/incognito), join same lobby.
+4. Start game from host.
+5. Submit at least one bidding action (`pass`) and one gameplay action attempt.
+6. Close browser B tab, confirm host sees B disconnected.
+7. Reopen browser B and rejoin using reconnect token; confirm seat reconnects.
+
+Useful curl snippets:
+
+```bash
+curl -s http://127.0.0.1:3000/health
 ```
 
-### `action.rejected`
-
-```json
-{
-  "version": 1,
-  "type": "action.rejected",
-  "payload": {
-    "requestId": "req-play-9",
-    "code": "NOT_YOUR_TURN",
-    "message": "Action actor does not match current trick turn."
-  }
-}
+```bash
+curl -s -X POST http://127.0.0.1:3000/lobbies/create \
+  -H 'content-type: application/json' \
+  -d '{"requestId":"smoke-create","displayName":"Host"}'
 ```
 
-### `system.notice`
+## Reconnect Troubleshooting
 
-```json
-{
-  "version": 1,
-  "type": "system.notice",
-  "payload": {
-    "severity": "warning",
-    "message": "Player \"player-2\" failed to reconnect before timeout. teamA wins by forfeit."
-  }
-}
+- `UNAUTHORIZED` on `/lobbies/join` with reconnect token:
+  - token does not exist, does not match session, or belongs to another lobby.
+- `INVALID_STATE` on reconnect join:
+  - reconnect window expired and seat forfeited.
+- websocket `401 Unauthorized` during upgrade:
+  - invalid `sessionId` or `reconnectToken` query params.
+- websocket `403 Forbidden` during upgrade:
+  - reconnect policy already marked session forfeit.
+- repeated websocket disconnects:
+  - check that each client uses its latest `sessionId` + `reconnectToken` pair.
+
+## Test Commands
+
+From repo root:
+
+```bash
+pnpm --filter @fun-euchre/server test
+pnpm --filter @fun-euchre/server typecheck
 ```
 
-## Realtime Channel Contract
+Contract/integration suites include:
 
-Current server runtime includes an in-memory room hub and socket abstraction:
-
-- room key format:
-  - `lobby:{lobbyId}`
-  - `game:{gameId}`
-- broadcast source is restricted to authoritative domain transitions
-- connected session receives ordered event batches for each room broadcast
-
-Code references:
-- `apps/server/src/realtime/eventHub.ts`
-- `apps/server/src/realtime/socketServer.ts`
-
-Important:
-- This is a transport abstraction, not yet a public WebSocket endpoint.
-- Phase 4 client transport should map these room IDs and event envelopes onto the chosen wire transport.
-
-## End-to-End Client Flows
-
-### Flow A: Create Lobby
-
-1. Client `POST /lobbies/create` with display name.
-2. Server validates payload.
-3. On success, client receives `outbound` events including `lobby.state`.
-4. Client renders seats/host/phase from `lobby.state.payload`.
-
-### Flow B: Join Lobby (x3 additional players)
-
-1. Each player calls `POST /lobbies/join`.
-2. Server validates `lobbyId`, `displayName`, and optional `reconnectToken`.
-3. Each success returns `outbound` events including updated `lobby.state`.
-4. Client re-renders full lobby snapshot from latest `lobby.state`.
-
-### Flow C: Start Lobby
-
-1. Host calls `POST /lobbies/start`.
-2. If host/auth/state checks pass, response contains updated `lobby.state` with `phase: "in_game"`.
-3. If checks fail, client receives normalized error with `UNAUTHORIZED` or `INVALID_STATE`.
-
-### Flow D: Play Card
-
-1. Active player calls `POST /actions` with `game.play_card` event envelope.
-2. Server validates protocol payload and maps to domain action.
-3. On success, response `outbound` includes `game.state`.
-4. On invalid turn/rule violation, response is normalized error and/or `action.rejected` projection.
-
-### Flow E: Reconnect / Forfeit
-
-1. Client disconnects; server/session policy tracks reconnect grace window.
-2. Reconnecting client can rejoin with `reconnectToken` (when orchestration exposes token issuance).
-3. If reconnect occurs within window, same player seat/session mapping is restored and state continues.
-4. If reconnect window expires, authoritative policy resolves forfeit:
-   - emits `system.notice`
-   - emits terminal `game.state` with completed outcome
-
-## Observability Fields
-
-Structured logs include stable correlation fields for integration/debugging:
-- `lobbyId`
-- `gameId`
-- `playerId`
-- `requestId`
-
-Primary events:
-- `server.lifecycle`
-- `lobby.action`
-- `game.transition`
-- `action.rejected`
-- `session.disconnected`
-- `session.reconnected`
-- `game.forfeit`
+- `apps/server/test/integration/runtime-wiring.test.ts`
+- `apps/server/test/integration/gameplay-lifecycle.test.ts`
+- `apps/server/test/integration/reconnect-lifecycle.test.ts`
+- `apps/server/test/integration/client-contract.test.ts`
+- `apps/server/test/realtime-transport.test.ts`

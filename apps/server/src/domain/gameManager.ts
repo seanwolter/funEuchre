@@ -1,9 +1,14 @@
-import type { ClientToServerEvent, ServerToClientEvent } from "@fun-euchre/protocol";
+import type {
+  ClientToServerEvent,
+  Seat,
+  ServerToClientEvent
+} from "@fun-euchre/protocol";
 import type { GameState } from "@fun-euchre/game-rules";
 import type { LobbyId } from "./types.js";
 import type { GameId } from "./types.js";
 import {
   applyProtocolEventToGameState,
+  toGamePrivateStateEventsBySeat,
   toActionRejectedEvent,
   type GameEventApplyResult
 } from "./protocolAdapter.js";
@@ -44,6 +49,7 @@ export type SubmitGameEventResult = {
   requestId: string;
   state: GameState | null;
   outbound: ServerToClientEvent[];
+  privateOutboundBySeat: Partial<Record<Seat, ServerToClientEvent[]>>;
   persisted: boolean;
 };
 
@@ -116,6 +122,7 @@ export class GameManager {
             `Game "${gameId}" was not found.`
           )
         ],
+        privateOutboundBySeat: {},
         persisted: false
       };
     }
@@ -132,6 +139,7 @@ export class GameManager {
             `Duplicate requestId "${event.requestId}" for game "${gameId}".`
           )
         ],
+        privateOutboundBySeat: this.privateOutboundBySeat(gameId, game.state),
         persisted: false
       };
     }
@@ -158,7 +166,21 @@ export class GameManager {
       requestId: event.requestId,
       state: result.state,
       outbound: [...result.outbound],
+      privateOutboundBySeat: this.privateOutboundBySeat(gameId, result.state),
       persisted
+    };
+  }
+
+  private privateOutboundBySeat(
+    gameId: GameId,
+    state: GameState
+  ): Partial<Record<Seat, ServerToClientEvent[]>> {
+    const bySeat = toGamePrivateStateEventsBySeat(gameId, state);
+    return {
+      north: [bySeat.north],
+      east: [bySeat.east],
+      south: [bySeat.south],
+      west: [bySeat.west]
     };
   }
 

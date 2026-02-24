@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   PROTOCOL_VERSION,
+  type GamePrivateStateEvent,
   type GamePlayCardEvent,
+  type Seat,
   type GameStateEvent,
   type ServerToClientEvent
 } from "@fun-euchre/protocol";
@@ -96,6 +98,33 @@ function buildNearCompletionPlayState(): GameState {
 
 function gameStateEvents(events: readonly ServerToClientEvent[]): GameStateEvent[] {
   return events.filter((event): event is GameStateEvent => event.type === "game.state");
+}
+
+function privateStateEventForSeat(
+  input: {
+    privateOutboundBySeat: Partial<Record<Seat, ServerToClientEvent[]>>;
+  },
+  seat: Seat
+): GamePrivateStateEvent {
+  const events = input.privateOutboundBySeat[seat];
+  if (!events || events.length !== 1) {
+    throw new Error(`Expected one private outbound event for seat "${seat}".`);
+  }
+
+  const event = events[0];
+  if (!event || event.type !== "game.private_state") {
+    throw new Error(`Expected game.private_state event for seat "${seat}".`);
+  }
+
+  return event;
+}
+
+function expectedHandSize(state: GameState, seat: Seat): number {
+  if (!state.hands) {
+    return 0;
+  }
+
+  return state.hands[seat].length;
 }
 
 function playCardEvent(
@@ -230,6 +259,10 @@ test("gameplay lifecycle validates actions server-side and keeps ordered game.st
     playCardEvent("req-invalid-turn", gameId, "east", "clubs:9")
   );
   assert.equal(invalidTurn.persisted, false);
+  assert.equal(
+    invalidTurn.outbound.some((event) => event.type === "game.private_state"),
+    false
+  );
   assert.deepEqual(invalidTurn.outbound, [
     {
       version: PROTOCOL_VERSION,
@@ -241,6 +274,14 @@ test("gameplay lifecycle validates actions server-side and keeps ordered game.st
       }
     }
   ]);
+  assert.deepEqual(
+    privateStateEventForSeat(invalidTurn, "north").payload.handCardIds,
+    ["hearts:A"]
+  );
+  assert.deepEqual(
+    privateStateEventForSeat(invalidTurn, "east").payload.handCardIds,
+    ["clubs:9"]
+  );
 
   const afterInvalid = gameStore.getByGameId(gameId);
   assert.ok(afterInvalid);
@@ -258,10 +299,22 @@ test("gameplay lifecycle validates actions server-side and keeps ordered game.st
     const submitted = await gameManager.submitEvent(gameId, event);
     assert.equal(submitted.persisted, true);
     assert.equal(submitted.outbound[0]?.type, "game.state");
+    assert.equal(
+      submitted.outbound.some((outbound) => outbound.type === "game.private_state"),
+      false
+    );
     if (!submitted.state) {
       throw new Error("Expected state after accepted game.play_card action.");
     }
     latestState = submitted.state;
+    for (const seat of ["north", "east", "south", "west"] as const) {
+      const privateState = privateStateEventForSeat(submitted, seat);
+      assert.equal(privateState.payload.seat, seat);
+      assert.equal(
+        privateState.payload.handCardIds.length,
+        expectedHandSize(submitted.state, seat)
+      );
+    }
     await publishGameEvents(socketServer, gameId, submitted.outbound);
   }
 
@@ -295,14 +348,21 @@ test("gameplay lifecycle validates actions server-side and keeps ordered game.st
   }
 
   assert.equal(initial.payload.trickNumber, 4);
+  assert.equal(initial.payload.phase, "play");
   assert.equal(initial.payload.turn, "north");
   assert.equal(afterNorth.payload.turn, "east");
   assert.equal(afterEast.payload.turn, "south");
   assert.equal(afterSouth.payload.turn, "west");
   assert.equal(afterWest.payload.turn, "north");
   assert.equal(afterWest.payload.trickNumber, 5);
+  assert.equal(afterWest.payload.phase, "score");
+  assert.equal(completed.payload.phase, "completed");
   assert.equal(completed.payload.scores.teamA, 11);
   assert.equal(completed.payload.scores.teamB, 0);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(initial.payload, "handCardIds"),
+    false
+  );
 
   for (const collector of collectors) {
     assert.deepEqual(gameStateEvents(collector.events), referenceGameEvents);

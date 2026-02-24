@@ -28,9 +28,17 @@ type LobbyCommandKind =
 
 type LobbyCommand = Extract<DomainCommand, { kind: LobbyCommandKind }>;
 
+export type LobbyCommandDispatchIdentity = {
+  lobbyId: string;
+  playerId: string;
+  sessionId: string;
+  reconnectToken: string;
+};
+
 export type CommandDispatchSuccess = {
   ok: true;
   outbound: ServerToClientEvent[];
+  identity?: LobbyCommandDispatchIdentity;
   statusCode?: number;
 };
 
@@ -224,10 +232,21 @@ async function handleLobbyRoute(
     }
   });
 
-  writeJsonResponse(response, dispatched.statusCode ?? 200, {
+  const responsePayload: {
+    requestId: string;
+    outbound: ServerToClientEvent[];
+    identity?: LobbyCommandDispatchIdentity;
+  } = {
     requestId,
     outbound: [...dispatched.outbound]
-  });
+  };
+  if (dispatched.identity) {
+    responsePayload.identity = {
+      ...dispatched.identity
+    };
+  }
+
+  writeJsonResponse(response, dispatched.statusCode ?? 200, responsePayload);
 }
 
 export function createLobbyRoutes(options: LobbyRoutesOptions = {}): RouteDefinition[] {
