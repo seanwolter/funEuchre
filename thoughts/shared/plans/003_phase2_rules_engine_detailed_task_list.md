@@ -27,6 +27,36 @@ Out of scope for this phase:
 - `P1` = Required for high-confidence integration in Phase 3.
 - `P2` = Strong hardening tasks that can finish after core engine completeness.
 
+## Execution Status (2026-02-23)
+- [x] Task 1 implemented: `packages/game-rules/package.json`, `packages/game-rules/tsconfig.json`, `packages/game-rules/tsconfig.test.json`, and `packages/game-rules/src/index.ts` created.
+- [x] Task 1 command verification (`pnpm --filter @fun-euchre/game-rules build`) confirmed by human tester
+- [x] Task 2 implemented: `packages/game-rules/src/types.ts`, `packages/game-rules/src/cards.ts`, `packages/game-rules/src/index.ts` exports, and `packages/game-rules/test/cards.test.ts`.
+- [x] Task 2 command verification (`pnpm --filter @fun-euchre/game-rules test`) confirmed by human tester.
+- [x] Task 3 implemented: `packages/game-rules/src/trump.ts`, `packages/game-rules/src/index.ts` exports, and `packages/game-rules/test/trump.test.ts`.
+- [x] Task 3 command verification (`pnpm --filter @fun-euchre/game-rules test`) confirmed by human tester.
+- [x] Task 4 implemented: `packages/game-rules/src/deck.ts`, `packages/game-rules/src/index.ts` exports, and `packages/game-rules/test/deck.test.ts`.
+- [x] Task 4 command verification (`pnpm --filter @fun-euchre/game-rules test`) confirmed by human tester.
+- [x] Task 5 implemented: `packages/game-rules/src/deal.ts`, `packages/game-rules/src/index.ts` exports, and `packages/game-rules/test/deal.test.ts`.
+- [x] Task 5 command verification (`pnpm --filter @fun-euchre/game-rules test`) confirmed by human tester.
+- [x] Task 6 implemented: `packages/game-rules/src/bidding.ts`, `packages/game-rules/src/index.ts` exports, and `packages/game-rules/test/bidding.test.ts`.
+- [x] Task 6 command verification (`pnpm --filter @fun-euchre/game-rules test`) confirmed by human tester.
+- [x] Task 7 implemented: `packages/game-rules/src/trick.ts`, `packages/game-rules/src/index.ts` exports, and `packages/game-rules/test/trick.test.ts`.
+- [x] Task 7 command verification (`pnpm --filter @fun-euchre/game-rules test`) confirmed by human tester.
+- [x] Task 8 implemented: `packages/game-rules/src/trick.ts` winner-resolution helpers and `packages/game-rules/test/trick-winner.test.ts`.
+- [x] Task 8 command verification (`pnpm --filter @fun-euchre/game-rules test`) confirmed by human tester.
+- [x] Task 9 implemented: `packages/game-rules/src/scoring.ts`, `packages/game-rules/src/index.ts` exports, and `packages/game-rules/test/scoring.test.ts`.
+- [x] Task 9 command verification (`pnpm --filter @fun-euchre/game-rules test`) confirmed by human tester.
+- [x] Task 10 implemented: `packages/game-rules/src/gameState.ts`, `packages/game-rules/src/index.ts` exports, and `packages/game-rules/test/gameState.test.ts`.
+- [x] Task 10 command verification (`pnpm --filter @fun-euchre/game-rules test`) confirmed by human tester.
+- [x] Task 11 implemented: `packages/game-rules/test/scenarios/full-hand.test.ts` and `packages/game-rules/test/scenarios/full-game.test.ts`, plus package test script updated to run scenario tests.
+- [x] Task 11 command verification (`pnpm --filter @fun-euchre/game-rules test`) confirmed by human tester.
+- [x] Task 12 implemented: `packages/game-rules/test/protocol-compat.test.ts` validates game reject taxonomy compatibility with `@fun-euchre/protocol` reject codes and verifies trick-reject mapping.
+- [x] Task 12 command verification (`pnpm --filter @fun-euchre/game-rules test`) confirmed by human tester.
+- [x] Task 13 implemented: removed legacy `.eslintrc.cjs` and standardized on flat config `eslint.config.cjs` as single lint source.
+- [x] Task 13 command verification (`pnpm lint`) confirmed by human tester.
+- [x] Task 14 implemented: added `packages/game-rules/README.md` and updated root `README.md` with rules-package documentation link.
+- [x] Coverage hardening pass completed: added reducer/trick tests for all-pass redeal and alone-hand turn progression/opening-lead behavior.
+
 ## Ordered Task List
 
 1. `P0` Create `packages/game-rules` workspace scaffold
@@ -201,13 +231,13 @@ Out of scope for this phase:
 9. Task 14 runs after Task 10 stabilizes.
 
 ## Phase 2 Exit Checklist
-- [ ] `packages/game-rules` exists with build/typecheck/lint/test scripts.
-- [ ] Bower/effective-suit logic is covered by deterministic unit tests.
-- [ ] Bidding and trick-play legality are enforced by pure domain logic.
-- [ ] Scoring covers makers/euchre/march/loner outcomes and game-to-10 completion.
-- [ ] Full-hand and full-game deterministic scenario tests pass.
-- [ ] Protocol compatibility risks for Phase 3 are identified and documented.
-- [ ] Repository linting is standardized on flat config only.
+- [x] `packages/game-rules` exists with build/typecheck/lint/test scripts.
+- [x] Bower/effective-suit logic is covered by deterministic unit tests.
+- [x] Bidding and trick-play legality are enforced by pure domain logic.
+- [x] Scoring covers makers/euchre/march/loner outcomes and game-to-10 completion.
+- [x] Full-hand and full-game deterministic scenario tests pass.
+- [x] Protocol compatibility risks for Phase 3 are identified and documented.
+- [x] Repository linting is standardized on flat config only.
 
 ## Verification Commands (when Node/pnpm are available)
 ```bash

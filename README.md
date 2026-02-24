@@ -4,6 +4,7 @@ Multiplayer web Euchre MVP (monorepo) with:
 - `apps/server` for the authoritative game server
 - `apps/web` for the browser client
 - `packages/protocol` for shared event contracts
+- `packages/game-rules` for deterministic Euchre domain rules
 
 ## Prerequisites
 
@@ -67,3 +68,6 @@ Expected: HTTP `200` and a JSON payload with `"status":"ok"`.
 Web shell:
 - Open `http://127.0.0.1:5173` in your browser.
 - Confirm the shell renders and route tabs (`Lobby`, `Game`, `Help`) are visible.
+
+Rules package docs:
+- See `packages/game-rules/README.md` for public API, invariants, and reducer usage examples.
