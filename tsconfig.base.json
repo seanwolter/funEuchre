@@ -20,10 +20,10 @@
         "packages/protocol/dist/*"
       ],
       "@fun-euchre/game-rules": [
-        "packages/game-rules/src/index.ts"
+        "packages/game-rules/dist/index.d.ts"
       ],
       "@fun-euchre/game-rules/*": [
-        "packages/game-rules/src/*"
+        "packages/game-rules/dist/*"
       ]
     }
   }

@@ -6,6 +6,12 @@ Multiplayer web Euchre MVP (monorepo) with:
 - `packages/protocol` for shared event contracts
 - `packages/game-rules` for deterministic Euchre domain rules
 
+## Server Contract
+
+For Phase 4 client integration details (HTTP endpoints, event envelopes, realtime room model, and sample flows), see:
+
+- `apps/server/README.md`
+
 ## Prerequisites
 
 - Node.js `22.x` (recommended to match CI)

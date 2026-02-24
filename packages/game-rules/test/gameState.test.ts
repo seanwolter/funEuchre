@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyGameAction,
+  availableRoundTwoTrumpSuits,
+  createBiddingState,
   createEuchreDeck,
   createInitialGameState,
   createTeamScore,
   createTrickState,
   effectiveSuit,
+  formatCardId,
   scoreHand,
   type Card,
   type GameAction,
@@ -53,6 +56,10 @@ function chooseLegalCardForTurn(state: GameState): Card {
   return first;
 }
 
+function cardIds(cards: readonly Card[]): string[] {
+  return cards.map((entry) => formatCardId(entry));
+}
+
 test("legal phase transitions: deal -> round1 -> round2 -> play", () => {
   let state = createInitialGameState({ dealer: "north" });
   assert.equal(state.phase, "deal");
@@ -91,6 +98,130 @@ test("legal phase transitions: deal -> round1 -> round2 -> play", () => {
   assert.equal(state.trump, "hearts");
   assert.equal(state.maker, "east");
   assert.equal(state.trick?.turn, "east");
+});
+
+test("round-1 order_up performs dealer upcard exchange before entering play", () => {
+  const state: GameState = {
+    ...createInitialGameState({ dealer: "north", handNumber: 1 }),
+    phase: "round1_bidding",
+    hands: {
+      north: [
+        card("clubs", "9"),
+        card("clubs", "10"),
+        card("hearts", "Q"),
+        card("spades", "A"),
+        card("diamonds", "K")
+      ],
+      east: [
+        card("hearts", "A"),
+        card("diamonds", "A"),
+        card("clubs", "A"),
+        card("spades", "K"),
+        card("spades", "Q")
+      ],
+      south: [
+        card("hearts", "10"),
+        card("hearts", "J"),
+        card("diamonds", "Q"),
+        card("clubs", "Q"),
+        card("spades", "10")
+      ],
+      west: [
+        card("diamonds", "9"),
+        card("diamonds", "J"),
+        card("clubs", "K"),
+        card("spades", "J"),
+        card("hearts", "K")
+      ]
+    },
+    upcard: card("hearts", "9"),
+    kitty: [card("diamonds", "10"), card("clubs", "J"), card("spades", "9")],
+    bidding: createBiddingState("north", "hearts"),
+    trump: null,
+    maker: null,
+    alone: false,
+    partnerSitsOut: null,
+    trick: null,
+    tricksWon: createTeamScore(),
+    lastHand: null,
+    winner: null
+  };
+
+  const next = mustTransition(state, {
+    type: "bidding",
+    action: { type: "order_up", actor: "east" }
+  });
+
+  assert.equal(next.phase, "play");
+  assert.equal(next.bidding?.dealerExchangeRequired, false);
+  assert.equal(next.upcard, null);
+
+  assert.deepEqual(cardIds(next.hands?.north ?? []).sort(), [
+    "clubs:10",
+    "diamonds:K",
+    "hearts:9",
+    "hearts:Q",
+    "spades:A"
+  ]);
+  assert.deepEqual(cardIds(next.kitty ?? []).sort(), [
+    "clubs:9",
+    "clubs:J",
+    "diamonds:10",
+    "spades:9"
+  ]);
+
+  const seen = new Set<string>();
+  for (const seat of ["north", "east", "south", "west"] as const) {
+    for (const id of cardIds(next.hands?.[seat] ?? [])) {
+      assert.equal(seen.has(id), false);
+      seen.add(id);
+    }
+  }
+  for (const id of cardIds(next.kitty ?? [])) {
+    assert.equal(seen.has(id), false);
+    seen.add(id);
+  }
+  assert.equal(seen.size, 24);
+});
+
+test("round-2 trump selection turns down upcard into kitty for card conservation", () => {
+  let state = createInitialGameState({ dealer: "north" });
+  state = mustTransition(state, { type: "deal_hand", deck: createEuchreDeck() });
+
+  state = mustTransition(state, {
+    type: "bidding",
+    action: { type: "pass", actor: "east" }
+  });
+  state = mustTransition(state, {
+    type: "bidding",
+    action: { type: "pass", actor: "south" }
+  });
+  state = mustTransition(state, {
+    type: "bidding",
+    action: { type: "pass", actor: "west" }
+  });
+  state = mustTransition(state, {
+    type: "bidding",
+    action: { type: "pass", actor: "north" }
+  });
+  if (!state.bidding || !state.upcard) {
+    throw new Error("Expected round-2 bidding state with upcard.");
+  }
+  const turnedDownUpcard = formatCardId(state.upcard);
+  const trump = availableRoundTwoTrumpSuits(state.bidding)[0];
+  if (!trump) {
+    throw new Error("Expected available round-two trump option.");
+  }
+
+  state = mustTransition(state, {
+    type: "bidding",
+    action: { type: "call_trump", actor: state.bidding.turn, trump }
+  });
+
+  assert.equal(state.phase, "play");
+  assert.equal(state.upcard, null);
+  assert.equal((state.kitty ?? []).length, 4);
+  assert.equal((state.kitty ?? []).some((entry) => formatCardId(entry) === turnedDownUpcard), true);
 });
 
 test("invalid phase transitions are rejected deterministically", () => {

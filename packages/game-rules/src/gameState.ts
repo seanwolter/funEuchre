@@ -1,4 +1,5 @@
 import { applyBiddingAction, createBiddingState, type BiddingAction } from "./bidding.js";
+import { formatCardId, rankPosition } from "./cards.js";
 import {
   createEuchreDeck
 } from "./deck.js";
@@ -25,6 +26,7 @@ import {
   type TrickRejectCode,
   type TrickState
 } from "./trick.js";
+import { effectiveSuit, isLeftBower, isRightBower } from "./trump.js";
 import { SEAT_VALUES, type Card, type Seat, type Suit, type Team } from "./types.js";
 
 export const GAME_REJECT_CODE_VALUES = [
@@ -205,6 +207,49 @@ function removeCardFromHand(hand: readonly Card[], card: Card): Card[] | null {
   return removed ? next : null;
 }
 
+function discardPriority(card: Card, trump: Suit): number {
+  if (isRightBower(card, trump)) {
+    return 300;
+  }
+  if (isLeftBower(card, trump)) {
+    return 290;
+  }
+
+  if (effectiveSuit(card, trump) === trump) {
+    return 200 + rankPosition(card.rank);
+  }
+
+  return rankPosition(card.rank);
+}
+
+function chooseDealerDiscardIndex(hand: readonly Card[], trump: Suit): number {
+  let bestIndex = 0;
+  let bestPriority = discardPriority(hand[0]!, trump);
+  let bestId = formatCardId(hand[0]!);
+
+  for (let index = 1; index < hand.length; index += 1) {
+    const card = hand[index]!;
+    const candidatePriority = discardPriority(card, trump);
+    if (candidatePriority < bestPriority) {
+      bestIndex = index;
+      bestPriority = candidatePriority;
+      bestId = formatCardId(card);
+      continue;
+    }
+
+    if (candidatePriority === bestPriority) {
+      const candidateId = formatCardId(card);
+      if (candidateId < bestId) {
+        bestIndex = index;
+        bestPriority = candidatePriority;
+        bestId = candidateId;
+      }
+    }
+  }
+
+  return bestIndex;
+}
+
 function phaseFromBiddingRound(round: 1 | 2): GamePhase {
   return round === 1 ? "round1_bidding" : "round2_bidding";
 }
@@ -335,6 +380,38 @@ export function applyGameAction(state: GameState, action: GameAction): GameTrans
         return reject(state, action.type, "INVALID_STATE", "Trump selection is incomplete.");
       }
 
+      const nextHands = cloneHands(state.hands);
+      const nextKitty = state.kitty ? cloneCards(state.kitty) : [];
+      let nextUpcard = state.upcard ? cloneCard(state.upcard) : null;
+      const resolvedBidding = {
+        ...nextBidding,
+        dealerExchangeRequired: false
+      };
+
+      if (nextBidding.dealerExchangeRequired) {
+        if (!nextUpcard) {
+          return reject(state, action.type, "INVALID_STATE", "Missing upcard for required dealer exchange.");
+        }
+
+        const exchangeHand = [...nextHands[state.dealer], cloneCard(nextUpcard)];
+        const discardIndex = chooseDealerDiscardIndex(exchangeHand, nextBidding.trump);
+        const discardedCard = exchangeHand[discardIndex];
+        if (!discardedCard) {
+          return reject(state, action.type, "INVALID_STATE", "Dealer exchange failed to select a discard card.");
+        }
+
+        nextHands[state.dealer] = exchangeHand.filter((_, index) => index !== discardIndex);
+        if (nextHands[state.dealer].length !== 5) {
+          return reject(state, action.type, "INVALID_STATE", "Dealer exchange did not result in a five-card hand.");
+        }
+
+        nextKitty.push(cloneCard(discardedCard));
+        nextUpcard = null;
+      } else if (nextUpcard) {
+        nextKitty.push(cloneCard(nextUpcard));
+        nextUpcard = null;
+      }
+
       const firstLead = nextActiveSeat(nextSeat(state.dealer), nextBidding.partnerSitsOut);
       const trick = createTrickState(firstLead, nextBidding.trump, nextBidding.partnerSitsOut);
 
@@ -343,7 +420,10 @@ export function applyGameAction(state: GameState, action: GameAction): GameTrans
         state: {
           ...state,
           phase: "play",
-          bidding: nextBidding,
+          hands: nextHands,
+          upcard: nextUpcard,
+          kitty: nextKitty.length > 0 ? nextKitty : null,
+          bidding: resolvedBidding,
           trump: nextBidding.trump,
           maker: nextBidding.maker,
           alone: nextBidding.alone,
