@@ -31,7 +31,7 @@ Out of scope for this phase:
 - `P2` = hardening/documentation tasks after core flows are stable.
 
 ## Execution Status (2026-02-24)
-- [ ] Phase 3 implementation not completed.
+- [x] Phase 3 implementation completed.
 - [x] Task 1 completed: server bootstrap moved to `index.ts` + `server.ts`; routing extracted to composable `http/router.ts`.
 - [x] Task 2 completed: branded domain identifiers and deterministic ID factory helpers added in `apps/server/src/domain/types.ts` and `apps/server/src/domain/ids.ts`, with adapter/test wiring updates.
 - [x] Task 3 completed: pure lobby domain transitions (`create/join/update-name/start`) and invariants implemented in `apps/server/src/domain/lobby.ts` with coverage in `apps/server/test/lobby.test.ts`.
@@ -46,8 +46,8 @@ Out of scope for this phase:
 - [x] Task 12 completed: structured observability baseline added in `apps/server/src/observability/logger.ts` with route/session/forfeit wiring and coverage in `apps/server/test/observability.test.ts`.
 - [x] Task 13 completed: runtime contract documentation added in `apps/server/README.md` and linked from root `README.md` for Phase 4 client integration.
 - [x] Task 14 completed: Phase 3 checkpoint artifacts captured in `thoughts/shared/research/005_phase3_server_integration_snapshot.md` and `thoughts/shared/sessions/003_phase3_server_integration_complete.md`.
-- [ ] Lobby/session/game orchestration modules not implemented yet.
-- [ ] Real-time transport and reconnect lifecycle not implemented yet.
+- [x] Lobby/session/game orchestration modules implemented for Phase 3 scope.
+- [x] Real-time transport and reconnect lifecycle implemented for Phase 3 scope.
 
 ## Ordered Task List
 
@@ -224,12 +224,12 @@ Out of scope for this phase:
 10. Tasks 13-14 complete after Task 11 passes.
 
 ## Phase 3 Exit Checklist
-- [ ] Lobby create/join/update-name/start flows are implemented and validated.
-- [ ] Game actions are processed through a serialized authoritative pipeline.
-- [ ] Realtime fan-out delivers consistent protocol events to all connected clients.
-- [ ] Reconnect succeeds within window and forfeit triggers after timeout expiry.
-- [ ] Server integration tests cover acceptance-critical multiplayer flows.
-- [ ] Structured logs include correlation metadata for key transitions.
+- [x] Lobby create/join/update-name/start flows are implemented and validated.
+- [x] Game actions are processed through a serialized authoritative pipeline.
+- [x] Realtime fan-out delivers consistent protocol events to all connected clients.
+- [x] Reconnect succeeds within window and forfeit triggers after timeout expiry.
+- [x] Server integration tests cover acceptance-critical multiplayer flows.
+- [x] Structured logs include correlation metadata for key transitions.
 
 ## Verification Commands (when Node/pnpm are available)
 ```bash
