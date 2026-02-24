@@ -308,3 +308,33 @@ pnpm test
 3. Execute Tasks 6-8 to establish web architecture and event/state plumbing.
 4. Execute Tasks 9-11 for playable UX and reconnect behavior.
 5. Finish Tasks 12-14 for hardening, contract confidence, and handoff artifacts.
+
+## Progress Checkpoint - 2026-02-23 23:55 CST
+
+### Work Completed This Session
+- [x] Completed Phase 4 Tasks 1-14 implementation and stabilization across server, protocol, and web packages.
+- [x] Fixed browser module/runtime integration using import maps plus dev-server HTTP/WS proxy routes.
+- [x] Added cross-device invite origin configuration (`PUBLIC_ORIGIN`) and invite link override plumbing.
+- [ ] Validate the final cross-device lobby-join flow from a second machine with `PUBLIC_ORIGIN` configured.
+
+### Current State
+- **Active File**: `apps/web/src/pages/LobbyPage.tsx:1`
+- **Current Task**: Stabilize cross-device lobby sharing and verify invite links resolve to the same lobby for remote clients.
+- **Blockers**: Multi-device manual validation is still pending outside automated tests.
+
+### Local Changes
+- Modified: `thoughts/shared/plans/005_phase4_client_runtime_and_gameplay_detailed_task_list.md` - Added this progress checkpoint.
+- Untracked: `thoughts/shared/sessions/006_phase4_runtime_multiclient_followup.md` - Session handoff summary for resume context.
+- Untracked: `tsc` - Empty local artifact intentionally excluded from checkpoint commits.
+
+### Next Steps
+1. Run server and web with `PUBLIC_ORIGIN` set to a network-reachable host URL, then open an invite link from a second machine.
+2. Execute multiplayer smoke flow (create, join, start, bid/play, reconnect) and capture any remaining regressions.
+3. Close remaining Phase 4 exit checklist items if multi-device validation passes.
+
+### Commands to Resume
+```bash
+cd /Users/seanzach/DEV/funEuchre
+git status
+$implement-plan thoughts/shared/plans/005_phase4_client_runtime_and_gameplay_detailed_task_list.md
+```
