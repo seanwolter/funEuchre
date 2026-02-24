@@ -13,6 +13,7 @@ import {
   resolveInviteOrigin
 } from "../app/config.js";
 import type { RouteView } from "./RouteView.js";
+import { buildJoinLobbySubmission } from "./joinLobbySubmission.js";
 import { buildInviteLink, resolveInviteLobbyId } from "./lobbyInvite.js";
 
 export const lobbyPage: RouteView = {
@@ -130,6 +131,7 @@ function lobbyMarkup(tabsMarkup: string): string {
             <input
               id="lobby-join-reconnect-token"
               name="reconnectToken"
+              placeholder="Leave blank unless recovering your own session"
               autocomplete="off"
             />
             <button id="lobby-join-submit" class="action-button" type="submit">
@@ -385,7 +387,7 @@ export function mountLobbyPage(options: LobbyPageMountOptions): () => void {
         await ensureRealtime(created.identity);
 
         elements.joinLobbyId.value = created.identity.lobbyId;
-        elements.joinReconnectToken.value = created.identity.reconnectToken;
+        elements.joinReconnectToken.value = "";
         elements.joinDisplayName.value = displayName;
         elements.renameDisplayName.value = displayName;
 
@@ -407,43 +409,27 @@ export function mountLobbyPage(options: LobbyPageMountOptions): () => void {
   const handleJoin = async (event: Event): Promise<void> => {
     event.preventDefault();
     await withBusyButton(elements.joinSubmit, async () => {
-      const lobbyId = asNonEmptyString(elements.joinLobbyId.value);
-      const displayName = asNonEmptyString(elements.joinDisplayName.value);
-      if (!lobbyId || !displayName) {
-        setFeedback("Join lobby requires lobby ID and display name.", "error");
+      const joinSubmission = buildJoinLobbySubmission({
+        lobbyId: elements.joinLobbyId.value,
+        displayName: elements.joinDisplayName.value,
+        reconnectToken: elements.joinReconnectToken.value
+      });
+      if (!joinSubmission.ok) {
+        setFeedback(joinSubmission.message, "error");
         return;
       }
 
-      const reconnectTokenField = asNonEmptyString(elements.joinReconnectToken.value);
-      const reconnectToken =
-        reconnectTokenField ??
-        (currentSession?.identity.lobbyId === lobbyId
-          ? currentSession.identity.reconnectToken
-          : undefined);
-
       try {
-        const joinInput: {
-          lobbyId: string;
-          displayName: string;
-          reconnectToken?: string | null;
-        } = {
-          lobbyId,
-          displayName
-        };
-        if (reconnectToken !== undefined) {
-          joinInput.reconnectToken = reconnectToken;
-        }
-
-        const joined = await options.httpClient.joinLobby(joinInput);
+        const joined = await options.httpClient.joinLobby(joinSubmission.input);
         currentSession = options.sessionClient.update({
           identity: joined.identity,
-          displayName
+          displayName: joinSubmission.input.displayName
         });
         pushOutbound(joined.outbound);
         await ensureRealtime(joined.identity);
 
-        elements.joinReconnectToken.value = joined.identity.reconnectToken;
-        elements.renameDisplayName.value = displayName;
+        elements.joinReconnectToken.value = "";
+        elements.renameDisplayName.value = joinSubmission.input.displayName;
         const resolvedLobbyId = extractLobbyIdForInvite(
           currentSession,
           joined.outbound,
@@ -543,10 +529,11 @@ export function mountLobbyPage(options: LobbyPageMountOptions): () => void {
     }
 
     const inviteLink = buildInviteLink(options.win.location.href, lobbyId, inviteOrigin);
+    const localOnlyInvite = !inviteOrigin && isLocalOnlyBrowserOrigin(options.win);
     syncInviteField(lobbyId);
-    if (!inviteOrigin && isLocalOnlyBrowserOrigin(options.win)) {
+    if (localOnlyInvite) {
       setFeedback(
-        "Invite link uses localhost. Set PUBLIC_ORIGIN to a LAN URL so other devices can join.",
+        "Invite link points to localhost. Set PUBLIC_ORIGIN to a LAN URL so other devices can join.",
         "warning"
       );
     }
@@ -558,7 +545,14 @@ export function mountLobbyPage(options: LobbyPageMountOptions): () => void {
 
     try {
       await clipboard.writeText(inviteLink);
-      setFeedback("Invite link copied to clipboard.", "success");
+      if (localOnlyInvite) {
+        setFeedback(
+          "Copied localhost invite link. It only works on this machine unless PUBLIC_ORIGIN is configured.",
+          "warning"
+        );
+      } else {
+        setFeedback("Invite link copied to clipboard.", "success");
+      }
     } catch {
       setFeedback("Clipboard write failed. Copy the link from the field.", "warning");
     }
@@ -573,9 +567,10 @@ export function mountLobbyPage(options: LobbyPageMountOptions): () => void {
     }
 
     const inviteLink = buildInviteLink(options.win.location.href, lobbyId, inviteOrigin);
-    if (!inviteOrigin && isLocalOnlyBrowserOrigin(options.win)) {
+    const localOnlyInvite = !inviteOrigin && isLocalOnlyBrowserOrigin(options.win);
+    if (localOnlyInvite) {
       setFeedback(
-        "Invite link uses localhost. Set PUBLIC_ORIGIN to a LAN URL so other devices can join.",
+        "Invite link points to localhost. Set PUBLIC_ORIGIN to a LAN URL so other devices can join.",
         "warning"
       );
     }
@@ -591,7 +586,14 @@ export function mountLobbyPage(options: LobbyPageMountOptions): () => void {
         text: "Join this private lobby:",
         url: inviteLink
       });
-      setFeedback("Invite link shared.", "success");
+      if (localOnlyInvite) {
+        setFeedback(
+          "Shared localhost invite link. It only works on this machine unless PUBLIC_ORIGIN is configured.",
+          "warning"
+        );
+      } else {
+        setFeedback("Invite link shared.", "success");
+      }
     } catch {
       setFeedback("Share was cancelled or unavailable. Use copy instead.", "warning");
     }
@@ -633,7 +635,7 @@ export function mountLobbyPage(options: LobbyPageMountOptions): () => void {
     elements.createDisplayName.value = displayName;
     elements.joinDisplayName.value = displayName;
     elements.renameDisplayName.value = displayName;
-    elements.joinReconnectToken.value = currentSession.identity.reconnectToken;
+    elements.joinReconnectToken.value = "";
     if (!elements.joinLobbyId.value.trim()) {
       elements.joinLobbyId.value = currentSession.identity.lobbyId;
     }

@@ -19,7 +19,10 @@ export type HashRouterOptions = {
 const DEFAULT_ROUTE: AppRoute = "lobby";
 
 export function resolveRoute(hash: string): AppRoute {
-  const normalized = hash.replace(/^#\/?/, "").toLowerCase();
+  const normalized = (hash
+    .replace(/^#\/?/, "")
+    .split("?")[0] ?? "")
+    .toLowerCase();
   if (ROUTE_KEYS.includes(normalized as AppRoute)) {
     return normalized as AppRoute;
   }

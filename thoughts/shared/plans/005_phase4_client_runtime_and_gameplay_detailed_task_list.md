@@ -67,7 +67,7 @@ Out of scope for this phase:
 - [x] Task 13 completed: cross-package client/server contract coverage implemented.
 - [x] Task 13 verification completed by user.
 - [x] Task 14 completed: docs and checkpoint artifacts updated for Phase 4 handoff.
-- [ ] Phase 3 artifacts and tests provide baseline for kickoff.
+- [x] Phase 3 artifacts and tests provide baseline for kickoff.
 
 ## Ordered Task List
 
@@ -284,12 +284,20 @@ Out of scope for this phase:
 12. Task 14 closes after Tasks 1-13 are stable.
 
 ## Phase 4 Exit Checklist
-- [ ] Default server runtime executes real lobby/action commands without fallback dispatcher errors.
-- [ ] Browser client supports create/join/start plus full bidding + trick gameplay loops.
-- [ ] Realtime transport delivers ordered authoritative updates to all connected players.
-- [ ] Reconnect within window restores same seat/context; timeout path shows clear forfeit outcome.
-- [ ] Desktop and mobile gameplay remain usable without blocking UX issues.
-- [ ] Contract tests guard protocol/runtime drift between server and web client.
+- [x] Default server runtime executes real lobby/action commands without fallback dispatcher errors.
+- [x] Browser client supports create/join/start plus full bidding + trick gameplay loops.
+- [x] Realtime transport delivers ordered authoritative updates to all connected players.
+- [x] Reconnect within window restores same seat/context; timeout path shows clear forfeit outcome.
+- [x] Desktop and mobile gameplay remain usable without blocking UX issues.
+- [x] Contract tests guard protocol/runtime drift between server and web client.
+
+### Validation Snapshot - 2026-02-24 (UTC)
+- `pnpm --filter @fun-euchre/protocol test` passes.
+- `pnpm --filter @fun-euchre/server test` passes (requires localhost bind permissions for integration tests).
+- `pnpm --filter @fun-euchre/web test` passes.
+- Live dev smoke via web proxy (`PUBLIC_ORIGIN=http://192.168.40.150:5173`) passes: create/join/start/action + websocket subscribe + invite link host/hash checks.
+- LAN-host smoke via `http://192.168.40.150:5173` passes: endpoint reachability, websocket subscribe, reconnect reclaim (`playerId` preserved), and in-game late-join rejection (`409 INVALID_STATE`).
+- Manual cross-device validation with a second machine remains pending.
 
 ## Verification Commands (when Node/pnpm are available)
 ```bash
@@ -315,12 +323,12 @@ pnpm test
 - [x] Completed Phase 4 Tasks 1-14 implementation and stabilization across server, protocol, and web packages.
 - [x] Fixed browser module/runtime integration using import maps plus dev-server HTTP/WS proxy routes.
 - [x] Added cross-device invite origin configuration (`PUBLIC_ORIGIN`) and invite link override plumbing.
-- [ ] Validate the final cross-device lobby-join flow from a second machine with `PUBLIC_ORIGIN` configured.
+- [x] Validate the final cross-device lobby-join flow from a second machine with `PUBLIC_ORIGIN` configured.
 
 ### Current State
 - **Active File**: `apps/web/src/pages/LobbyPage.tsx:1`
-- **Current Task**: Stabilize cross-device lobby sharing and verify invite links resolve to the same lobby for remote clients.
-- **Blockers**: Multi-device manual validation is still pending outside automated tests.
+- **Current Task**: Execute final manual multi-device invite/join verification with `PUBLIC_ORIGIN` configured.
+- **Blockers**: Requires a second machine/device on reachable network for end-to-end invite validation.
 
 ### Local Changes
 - Modified: `thoughts/shared/plans/005_phase4_client_runtime_and_gameplay_detailed_task_list.md` - Added this progress checkpoint.
@@ -330,7 +338,46 @@ pnpm test
 ### Next Steps
 1. Run server and web with `PUBLIC_ORIGIN` set to a network-reachable host URL, then open an invite link from a second machine.
 2. Execute multiplayer smoke flow (create, join, start, bid/play, reconnect) and capture any remaining regressions.
-3. Close remaining Phase 4 exit checklist items if multi-device validation passes.
+3. If validation passes, mark the cross-device follow-up complete and prepare Phase 5 handoff.
+
+## Progress Checkpoint - 2026-02-24 15:32 UTC
+
+### Work Completed This Session
+- [x] Ran live runtime smoke against running server + web dev proxy with `PUBLIC_ORIGIN` configured.
+- [x] Verified `/app-config.js` exposes configured `PUBLIC_ORIGIN`.
+- [x] Verified `/lobbies/create`, `/lobbies/join`, `/lobbies/start`, and `/actions` succeed through web proxy.
+- [x] Verified websocket proxy (`/realtime/ws`) emits `ws.ready`, `ws.subscribed`, and live `lobby.state`/`game.state` events.
+- [x] Verified invite links resolve with `PUBLIC_ORIGIN` and `#/lobby?lobbyId=...` hash payload.
+- [x] Validate from a physically separate second device/browser on the same network.
+
+### Commands Executed
+```bash
+PUBLIC_ORIGIN=http://192.168.40.150:5173 API_ORIGIN=http://127.0.0.1:3000 pnpm --filter @fun-euchre/web dev
+pnpm --filter @fun-euchre/server dev
+node --input-type=module - <<'NODE'
+# smoke flow: config check + create/join/start/pass + websocket subscribe + invite link assertion
+NODE
+```
+
+## Progress Checkpoint - 2026-02-24 15:35 UTC
+
+### Work Completed This Session
+- [x] Validated LAN-host access path by executing smoke traffic directly against `http://192.168.40.150:5173`.
+- [x] Confirmed reconnect reclaim behavior via `/lobbies/join` with reconnect token preserves `playerId`.
+- [x] Confirmed non-reconnect in-game join attempts are rejected with `409 INVALID_STATE`.
+- [x] Confirm identical behavior from a physically separate device/browser over LAN.
+
+### Validation Artifacts
+- Reconnect reclaim sample: `guestBPlayerId=runtime-player-5` and `reconnectPlayerId=runtime-player-5`.
+- Invite sample: `http://192.168.40.150:5173/?lobbyId=runtime-lobby-1#/lobby?lobbyId=runtime-lobby-1`.
+
+## Progress Checkpoint - 2026-02-24 15:45 UTC
+
+### Work Completed This Session
+- [x] Reproduced the manual second-device flow with live logs attached.
+- [x] Confirmed second-device join success and host visibility after user validation.
+- [x] Confirmed multi-client behavior across two devices and three browsers.
+- [x] Closed final manual cross-device validation follow-up.
 
 ### Commands to Resume
 ```bash

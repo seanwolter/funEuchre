@@ -3,6 +3,7 @@ import test from "node:test";
 import type { LobbyStatePayload } from "@fun-euchre/protocol";
 import { renderSeatGrid } from "../src/components/SeatGrid.js";
 import { deriveStartReadiness } from "../src/components/StartControls.js";
+import { buildJoinLobbySubmission } from "../src/pages/joinLobbySubmission.js";
 import { buildInviteLink, resolveInviteLobbyId } from "../src/pages/lobbyInvite.js";
 
 const connectedLobby: LobbyStatePayload = {
@@ -123,7 +124,7 @@ test("invite link helper encodes and resolves lobby id from URL", () => {
   );
 
   assert.match(inviteLink, /lobbyId=lobby-42/);
-  assert.match(inviteLink, /#\/lobby$/);
+  assert.match(inviteLink, /#\/lobby\?lobbyId=lobby-42$/);
   assert.equal(resolveInviteLobbyId(inviteLink), "lobby-42");
 });
 
@@ -136,4 +137,67 @@ test("invite link helper can override origin for cross-device sharing", () => {
 
   assert.match(inviteLink, /^http:\/\/192\.168\.1\.20:5173\//);
   assert.match(inviteLink, /lobbyId=lobby-42/);
+});
+
+test("invite lobby id resolves from hash query fallback", () => {
+  const inviteLink = "http://127.0.0.1:5173/#/lobby?lobbyId=lobby-88";
+  assert.equal(resolveInviteLobbyId(inviteLink), "lobby-88");
+});
+
+test("join submission omits reconnect token when input is blank", () => {
+  const result = buildJoinLobbySubmission({
+    lobbyId: "lobby-42",
+    displayName: "Guest",
+    reconnectToken: "   "
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) {
+    throw new Error("Expected successful join submission.");
+  }
+  assert.deepEqual(result.input, {
+    lobbyId: "lobby-42",
+    displayName: "Guest"
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(result.input, "reconnectToken"), false);
+});
+
+test("join submission includes reconnect token only when explicitly provided", () => {
+  const result = buildJoinLobbySubmission({
+    lobbyId: "lobby-42",
+    displayName: "Guest",
+    reconnectToken: "token-guest"
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) {
+    throw new Error("Expected successful join submission.");
+  }
+  assert.deepEqual(result.input, {
+    lobbyId: "lobby-42",
+    displayName: "Guest",
+    reconnectToken: "token-guest"
+  });
+});
+
+test("join submission requires lobby id and display name", () => {
+  const missingLobby = buildJoinLobbySubmission({
+    lobbyId: "   ",
+    displayName: "Guest",
+    reconnectToken: ""
+  });
+  assert.deepEqual(missingLobby, {
+    ok: false,
+    message: "Join lobby requires lobby ID and display name."
+  });
+
+  const missingDisplayName = buildJoinLobbySubmission({
+    lobbyId: "lobby-42",
+    displayName: "",
+    reconnectToken: "token-guest"
+  });
+  assert.deepEqual(missingDisplayName, {
+    ok: false,
+    message: "Join lobby requires lobby ID and display name."
+  });
 });
