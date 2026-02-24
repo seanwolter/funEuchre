@@ -4,12 +4,19 @@
   "private": true,
   "description": "Monorepo for the funEuchre multiplayer web game.",
   "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "\"$npm_execpath\" -r --parallel --if-present dev",
     "build": "\"$npm_execpath\" -r --if-present build",
     "test": "\"$npm_execpath\" --filter @fun-euchre/protocol build && \"$npm_execpath\" -r --if-present test",
     "lint": "\"$npm_execpath\" --filter @fun-euchre/protocol build && \"$npm_execpath\" -r --if-present lint",
-    "typecheck": "\"$npm_execpath\" --filter @fun-euchre/protocol build && \"$npm_execpath\" -r --if-present typecheck"
+    "typecheck": "\"$npm_execpath\" --filter @fun-euchre/protocol build && \"$npm_execpath\" -r --if-present typecheck",
+    "cloudrun:build:server": "pnpm --filter @fun-euchre/server build",
+    "cloudrun:start:server": "node apps/server/dist/index.js",
+    "cloudrun:build:web": "pnpm --filter @fun-euchre/protocol build && pnpm --filter @fun-euchre/web build",
+    "cloudrun:start:web": "node apps/web/dev-server.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",

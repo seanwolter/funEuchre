@@ -1,0 +1,13 @@
+.git
+.github
+.codex
+node_modules
+**/node_modules
+dist
+**/dist
+dist-test
+**/dist-test
+coverage
+**/coverage
+thoughts
+*.log
