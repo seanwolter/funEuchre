@@ -28,6 +28,14 @@ PUBLIC_ORIGIN=http://<lan-ip>:5173 API_ORIGIN=http://127.0.0.1:3000 pnpm --filte
 - `PUBLIC_ORIGIN` controls invite-link host.
 - `API_ORIGIN` controls proxy target for `/lobbies/*`, `/actions`, and `/realtime/ws`.
 
+## Cloud Run Notes
+
+- GitHub source deploy Dockerfile: `apps/web/Dockerfile`
+- Container entrypoint: `node apps/web/dev-server.mjs`
+- Required runtime env var: `API_ORIGIN=https://<fun-euchre-api-url>`
+- Recommended runtime env var: `PUBLIC_ORIGIN=https://<fun-euchre-web-url>`
+- Cloud Run provides `PORT`; web shell binds to `0.0.0.0` and respects `PORT`.
+
 ## Runtime Architecture
 
 ### App Bootstrap

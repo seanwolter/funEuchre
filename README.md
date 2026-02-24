@@ -47,6 +47,38 @@ pnpm --filter @fun-euchre/web dev
 pnpm --filter @fun-euchre/web test
 ```
 
+## Cloud Run Deployment (GitHub Source)
+
+This repo is prepared for Cloud Run builds that pull directly from GitHub (no local `gcloud` usage required).
+
+### Cloud Run Build Scripts
+
+```bash
+pnpm run cloudrun:build:server
+pnpm run cloudrun:build:web
+```
+
+### Deploy `fun-euchre-api`
+
+1. In Cloud Run, create a service from your GitHub repo/branch.
+2. Use build type `Dockerfile`.
+3. Keep source context at repository root (`/`).
+4. Set Dockerfile path to `apps/server/Dockerfile`.
+5. Set runtime env var `FUN_EUCHRE_RECONNECT_TOKEN_SECRET` to a long random value.
+6. Set max instances to `1` (runtime state is in-memory per instance).
+
+### Deploy `fun-euchre-web`
+
+1. Create a second Cloud Run service from the same GitHub repo/branch.
+2. Use build type `Dockerfile`.
+3. Keep source context at repository root (`/`).
+4. Set Dockerfile path to `apps/web/Dockerfile`.
+5. Set env vars:
+   - `API_ORIGIN=https://<fun-euchre-api-url>`
+   - `PUBLIC_ORIGIN=https://<fun-euchre-web-url>`
+
+After both services are live, open the `fun-euchre-web` URL to access the app.
+
 ## Runtime Docs
 
 - Server runtime + transport contract: `apps/server/README.md`

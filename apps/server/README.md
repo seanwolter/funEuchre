@@ -38,6 +38,14 @@ curl -sSf http://127.0.0.1:3000/health
 curl -sSf http://127.0.0.1:3000/metrics
 ```
 
+## Cloud Run Notes
+
+- GitHub source deploy Dockerfile: `apps/server/Dockerfile`
+- Container entrypoint: `node apps/server/dist/index.js`
+- Cloud Run provides `PORT`; server binds to `0.0.0.0` and respects `PORT`.
+- Set `FUN_EUCHRE_RECONNECT_TOKEN_SECRET` in Cloud Run env vars.
+- Keep max instances at `1` for consistent in-memory runtime behavior.
+
 ## Runtime Hardening Configuration
 
 Environment keys are validated at startup by `resolveRuntimeConfig(...)`.
